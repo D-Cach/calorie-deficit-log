@@ -384,6 +384,10 @@
     color: var(--ink-soft);
   }
 
+  .macro-totals .over {
+    color: var(--clay);
+  }
+
   .macro-chart-block {
     display: flex;
     align-items: center;
@@ -450,41 +454,7 @@
   }
 
   #target-form {
-    display: flex;
-    gap: 8px;
     margin-top: 8px;
-  }
-
-  #target-form.hidden {
-    display: none;
-  }
-
-  #target-input {
-    width: 96px;
-    font-family: var(--font-body);
-    font-size: 15px;
-    background: var(--paper-raised);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 10px;
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-  }
-
-  #save-target-btn {
-    font-family: var(--font-body);
-    font-size: 14px;
-    font-weight: 600;
-    background: var(--moss);
-    color: var(--paper-raised);
-    border: none;
-    border-radius: 8px;
-    padding: 8px 14px;
-    cursor: pointer;
-  }
-
-  #save-target-btn:hover {
-    background: var(--moss-deep);
   }
 
   .trend-block {
@@ -643,10 +613,26 @@
       <p class="streak-line" id="streak-line"></p>
 
       <div class="target-settings">
-        <button type="button" id="edit-target-btn" class="ghost-btn">Change daily target</button>
-        <div id="target-form" class="hidden">
-          <input type="number" id="target-input" min="1">
-          <button type="button" id="save-target-btn">Save</button>
+        <button type="button" id="edit-target-btn" class="ghost-btn">Change daily targets</button>
+        <div id="target-form" class="new-food-fields hidden">
+          <p class="new-food-label">Daily targets — leave protein/carbs/fat blank to skip tracking them:</p>
+          <div class="new-food-row">
+            <label>Calories
+              <input type="number" id="target-calories-input" min="1">
+            </label>
+            <label>Protein (g)
+              <input type="number" id="target-protein-input" min="0">
+            </label>
+            <label>Carbs (g)
+              <input type="number" id="target-carbs-input" min="0">
+            </label>
+            <label>Fat (g)
+              <input type="number" id="target-fat-input" min="0">
+            </label>
+          </div>
+          <div class="entry-actions">
+            <button type="button" id="save-target-btn">Save</button>
+          </div>
         </div>
       </div>
     </div>
@@ -724,6 +710,11 @@
   let editingId = null;
   let editingFoodId = null;
   let dailyTarget = loadDailyTarget();
+  // Macro targets are optional (null = "not tracking this one") — unlike the
+  // calorie target, which has always been required and defaults to 1850.
+  let proteinTarget = loadProteinTarget();
+  let carbsTarget = loadCarbsTarget();
+  let fatTarget = loadFatTarget();
 
   let migrated = false;
   entries.forEach(function (entry) {
@@ -771,7 +762,10 @@
   const meterFillEl = document.getElementById('meter-fill');
   const editTargetBtn = document.getElementById('edit-target-btn');
   const targetForm = document.getElementById('target-form');
-  const targetInput = document.getElementById('target-input');
+  const targetCaloriesInput = document.getElementById('target-calories-input');
+  const targetProteinInput = document.getElementById('target-protein-input');
+  const targetCarbsInput = document.getElementById('target-carbs-input');
+  const targetFatInput = document.getElementById('target-fat-input');
   const saveTargetBtn = document.getElementById('save-target-btn');
   const historyListEl = document.getElementById('history-list');
   const monthlyListEl = document.getElementById('monthly-list');
@@ -1064,7 +1058,7 @@
 
     totalEl.textContent = total.toLocaleString();
     targetValueEl.textContent = dailyTarget.toLocaleString();
-    macroTotalsEl.textContent = formatMacros(proteinTotal, carbsTotal, fatTotal);
+    renderMacroTotalsLine(proteinTotal, carbsTotal, fatTotal);
     renderMacroChart(proteinTotal, carbsTotal, fatTotal);
 
     const pct = Math.min(total / dailyTarget, 1) * 100;
@@ -1078,6 +1072,43 @@
 
   function formatMacros(protein, carbs, fat) {
     return round1(protein) + 'g protein · ' + round1(carbs) + 'g carbs · ' + round1(fat) + 'g fat';
+  }
+
+  // Shared by the DOM-rendered totals line (which colors "over" spans) and
+  // the plain-text summary — one target-aware "Xg protein" / "Xg / Yg protein"
+  // formatter instead of duplicating that logic in both places.
+  function formatMacroPart(value, target, label) {
+    const base = round1(value) + 'g';
+    return target !== null ? base + ' / ' + target + 'g ' + label : base + ' ' + label;
+  }
+
+  function formatMacroTotals(protein, carbs, fat) {
+    return formatMacroPart(protein, proteinTarget, 'protein') + ' · ' +
+      formatMacroPart(carbs, carbsTarget, 'carbs') + ' · ' +
+      formatMacroPart(fat, fatTarget, 'fat');
+  }
+
+  // Today's macro-totals line, unlike per-entry macro lines, compares against
+  // the optional daily targets and colors any macro that's over its target.
+  function renderMacroTotalsLine(protein, carbs, fat) {
+    macroTotalsEl.innerHTML = '';
+    const parts = [
+      { value: protein, target: proteinTarget, label: 'protein' },
+      { value: carbs, target: carbsTarget, label: 'carbs' },
+      { value: fat, target: fatTarget, label: 'fat' }
+    ];
+
+    parts.forEach(function (part, index) {
+      if (index > 0) {
+        macroTotalsEl.appendChild(document.createTextNode(' · '));
+      }
+      const span = document.createElement('span');
+      span.textContent = formatMacroPart(part.value, part.target, part.label);
+      if (part.target !== null && part.value > part.target) {
+        span.className = 'over';
+      }
+      macroTotalsEl.appendChild(span);
+    });
   }
 
   // Draws today's macro split as a donut chart, sized by each macro's share
@@ -1549,20 +1580,72 @@
     return saved ? Number(saved) : DEFAULT_DAILY_TARGET;
   }
 
+  // Protein/carbs/fat targets follow the same save/load pattern as the
+  // calorie target, but store an empty string for "not set" instead of a
+  // default number — there's no sensible universal default for these.
+  function saveProteinTarget() {
+    localStorage.setItem('calorie-protein-target', proteinTarget === null ? '' : String(proteinTarget));
+  }
+
+  function loadProteinTarget() {
+    const saved = localStorage.getItem('calorie-protein-target');
+    return saved ? Number(saved) : null;
+  }
+
+  function saveCarbsTarget() {
+    localStorage.setItem('calorie-carbs-target', carbsTarget === null ? '' : String(carbsTarget));
+  }
+
+  function loadCarbsTarget() {
+    const saved = localStorage.getItem('calorie-carbs-target');
+    return saved ? Number(saved) : null;
+  }
+
+  function saveFatTarget() {
+    localStorage.setItem('calorie-fat-target', fatTarget === null ? '' : String(fatTarget));
+  }
+
+  function loadFatTarget() {
+    const saved = localStorage.getItem('calorie-fat-target');
+    return saved ? Number(saved) : null;
+  }
+
   editTargetBtn.addEventListener('click', function () {
-    targetInput.value = dailyTarget;
+    targetCaloriesInput.value = dailyTarget;
+    targetProteinInput.value = proteinTarget === null ? '' : proteinTarget;
+    targetCarbsInput.value = carbsTarget === null ? '' : carbsTarget;
+    targetFatInput.value = fatTarget === null ? '' : fatTarget;
     targetForm.classList.remove('hidden');
     editTargetBtn.classList.add('hidden');
-    targetInput.focus();
+    targetCaloriesInput.focus();
   });
 
-  saveTargetBtn.addEventListener('click', function () {
-    const value = Number(targetInput.value);
-    if (value > 0) {
-      dailyTarget = value;
-      saveDailyTarget();
-      render();
+  // A blank field means "don't track this target" (null) — distinct from 0,
+  // which would mean "track it, and flag anything above zero as over."
+  function parseOptionalTarget(rawValue) {
+    const trimmed = rawValue.trim();
+    if (trimmed === '') {
+      return null;
     }
+    const value = Number(trimmed);
+    return value >= 0 ? value : null;
+  }
+
+  saveTargetBtn.addEventListener('click', function () {
+    const caloriesValue = Number(targetCaloriesInput.value);
+    if (caloriesValue > 0) {
+      dailyTarget = caloriesValue;
+      saveDailyTarget();
+    }
+
+    proteinTarget = parseOptionalTarget(targetProteinInput.value);
+    carbsTarget = parseOptionalTarget(targetCarbsInput.value);
+    fatTarget = parseOptionalTarget(targetFatInput.value);
+    saveProteinTarget();
+    saveCarbsTarget();
+    saveFatTarget();
+
+    render();
     targetForm.classList.add('hidden');
     editTargetBtn.classList.remove('hidden');
   });
@@ -1749,7 +1832,7 @@
     const lines = [];
     lines.push('Calorie Deficit Log — ' + dateLabel);
     lines.push('Total: ' + total.toLocaleString() + ' / ' + dailyTarget.toLocaleString() + ' kcal');
-    lines.push('Protein: ' + round1(protein) + 'g · Carbs: ' + round1(carbs) + 'g · Fat: ' + round1(fat) + 'g');
+    lines.push(formatMacroTotals(protein, carbs, fat));
     lines.push('Streak: ' + streak + (streak === 1 ? ' day' : ' days'));
     lines.push('');
 
