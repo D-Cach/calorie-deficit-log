@@ -1684,6 +1684,9 @@
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
       dailyTarget: dailyTarget,
+      proteinTarget: proteinTarget,
+      carbsTarget: carbsTarget,
+      fatTarget: fatTarget,
       foods: foods,
       entries: entries
     };
@@ -1768,9 +1771,17 @@
     entries = pendingImportBackup.entries;
     foods = pendingImportBackup.foods;
     dailyTarget = pendingImportBackup.dailyTarget;
+    // Older backups (from before macro targets existed) won't have these keys —
+    // treat a missing key the same as "not tracking this target".
+    proteinTarget = typeof pendingImportBackup.proteinTarget === 'number' ? pendingImportBackup.proteinTarget : null;
+    carbsTarget = typeof pendingImportBackup.carbsTarget === 'number' ? pendingImportBackup.carbsTarget : null;
+    fatTarget = typeof pendingImportBackup.fatTarget === 'number' ? pendingImportBackup.fatTarget : null;
     saveEntries();
     saveFoods();
     saveDailyTarget();
+    saveProteinTarget();
+    saveCarbsTarget();
+    saveFatTarget();
 
     pendingImportBackup = null;
     importConfirmEl.classList.add('hidden');
