@@ -1905,6 +1905,24 @@
     editGoalWeightBtn.classList.remove('hidden');
   });
 
+  // For each weigh-in, averages every entry within the trailing 7 days up to
+  // and including that date — a real rolling average, not just one number
+  // for "the last 7 days." Smooths out the day-to-day water/sodium noise
+  // D's own tracking notes call out, without throwing away the raw points.
+  function calculateRollingWeightAverage(sortedOldestFirst) {
+    return sortedOldestFirst.map(function (weighIn) {
+      const cutoff = new Date(weighIn.date + 'T00:00:00');
+      cutoff.setDate(cutoff.getDate() - 6);
+      const cutoffStr = formatDate(cutoff);
+
+      const windowEntries = sortedOldestFirst.filter(function (w) {
+        return w.date >= cutoffStr && w.date <= weighIn.date;
+      });
+      const sum = windowEntries.reduce(function (total, w) { return total + w.weight; }, 0);
+      return sum / windowEntries.length;
+    });
+  }
+
   // Unlike the calorie bar chart, this axis deliberately does NOT start at
   // zero — body weight only ever moves within a small relative range, so a
   // zero-based scale would squash the whole trend into an unreadable sliver
@@ -1912,6 +1930,7 @@
   function drawWeightTrendChart() {
     const styles = getComputedStyle(document.documentElement);
     const mossColor = styles.getPropertyValue('--moss').trim();
+    const mossDeepColor = styles.getPropertyValue('--moss-deep').trim();
     const goldColor = styles.getPropertyValue('--gold').trim();
     const inkSoftColor = styles.getPropertyValue('--ink-soft').trim();
 
@@ -1975,6 +1994,25 @@
       sortedOldestFirst.forEach(function (weighIn, index) {
         const x = xFor(index);
         const y = yFor(weighIn.weight);
+        if (index === 0) {
+          weightTrendCtx.moveTo(x, y);
+        } else {
+          weightTrendCtx.lineTo(x, y);
+        }
+      });
+      weightTrendCtx.stroke();
+    }
+
+    // The smoothed trend, drawn on top of the raw line but under the dots —
+    // "here's the real logged data, and here's the noise-filtered view of it."
+    if (sortedOldestFirst.length > 1) {
+      const rollingAverages = calculateRollingWeightAverage(sortedOldestFirst);
+      weightTrendCtx.strokeStyle = mossDeepColor;
+      weightTrendCtx.lineWidth = 2;
+      weightTrendCtx.beginPath();
+      rollingAverages.forEach(function (avg, index) {
+        const x = xFor(index);
+        const y = yFor(avg);
         if (index === 0) {
           weightTrendCtx.moveTo(x, y);
         } else {
