@@ -164,6 +164,9 @@
   #food-unit,
   #entry-form button,
   #food-search-input,
+  #weight-date-input,
+  #weight-value-input,
+  #weight-form button,
   .new-food-row input {
     font-family: var(--font-body);
     font-size: 15px;
@@ -173,6 +176,8 @@
   #food-weight,
   #food-unit,
   #food-search-input,
+  #weight-date-input,
+  #weight-value-input,
   .new-food-row input {
     background: var(--paper-raised);
     border: 1px solid var(--line);
@@ -184,6 +189,16 @@
   #food-name {
     flex: 1;
     min-width: 0;
+  }
+
+  #weight-value-input {
+    flex: 1;
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #weight-date-input {
+    width: 150px;
   }
 
   #food-search-input {
@@ -252,6 +267,25 @@
 
   #entry-form button[type="submit"]:hover {
     background: var(--moss-deep);
+  }
+
+  #weight-form button[type="submit"] {
+    background: var(--moss);
+    color: var(--paper-raised);
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  #weight-form button[type="submit"]:hover {
+    background: var(--moss-deep);
+  }
+
+  #weight-form {
+    margin-bottom: 22px;
   }
 
   .app ul {
@@ -581,6 +615,7 @@
     <button type="button" id="tab-today" class="tab active">Today</button>
     <button type="button" id="tab-history" class="tab">History</button>
     <button type="button" id="tab-foods" class="tab">Foods</button>
+    <button type="button" id="tab-weight" class="tab">Weight</button>
   </nav>
 
   <section id="today-view">
@@ -684,6 +719,42 @@
     <ul id="foods-list" class="row-list"></ul>
   </section>
 
+  <section id="weight-view" class="hidden">
+    <form id="weight-form">
+      <div class="form-row">
+        <input type="date" id="weight-date-input" required>
+        <input type="number" id="weight-value-input" placeholder="Weight (kg)" step="any" min="0" required>
+        <button type="submit">Log</button>
+      </div>
+    </form>
+
+    <div class="trend-block">
+      <div class="trend-header">
+        <span class="trend-label">Weight Trend</span>
+        <span class="trend-avg" id="weight-latest-line"></span>
+      </div>
+      <canvas id="weight-trend-chart" width="500" height="170"></canvas>
+    </div>
+
+    <div class="target-settings">
+      <button type="button" id="edit-goal-weight-btn" class="ghost-btn">Change goal weight</button>
+      <div id="goal-weight-form" class="new-food-fields hidden">
+        <p class="new-food-label">Goal weight — leave blank to skip the reference line:</p>
+        <div class="new-food-row">
+          <label>Goal (kg)
+            <input type="number" id="goal-weight-input" step="any" min="0">
+          </label>
+        </div>
+        <div class="entry-actions">
+          <button type="button" id="save-goal-weight-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="trend-label">Log</p>
+    <ul id="weigh-ins-list" class="row-list"></ul>
+  </section>
+
   <footer class="app-footer">
     <div class="app-footer-actions">
       <button type="button" id="copy-summary-btn" class="ghost-btn">Copy today's summary</button>
@@ -735,6 +806,13 @@
   let proteinTarget = loadProteinTarget();
   let carbsTarget = loadCarbsTarget();
   let fatTarget = loadFatTarget();
+
+  // A separate data series from food entries entirely — weigh-ins track an
+  // outcome (body weight), not something eaten, so they get their own
+  // localStorage key rather than being folded into the entries array.
+  let weighIns = loadWeighIns();
+  let editingWeighInId = null;
+  let goalWeight = loadGoalWeight();
 
   let migrated = false;
   entries.forEach(function (entry) {
@@ -807,9 +885,23 @@
   const todayViewEl = document.getElementById('today-view');
   const historyViewEl = document.getElementById('history-view');
   const foodsViewEl = document.getElementById('foods-view');
+  const weightViewEl = document.getElementById('weight-view');
   const todayTabBtn = document.getElementById('tab-today');
   const historyTabBtn = document.getElementById('tab-history');
   const foodsTabBtn = document.getElementById('tab-foods');
+  const weightTabBtn = document.getElementById('tab-weight');
+  const weightForm = document.getElementById('weight-form');
+  const weightDateInput = document.getElementById('weight-date-input');
+  const weightValueInput = document.getElementById('weight-value-input');
+  const weightSubmitBtn = weightForm.querySelector('button[type="submit"]');
+  const weighInsListEl = document.getElementById('weigh-ins-list');
+  const weightLatestLineEl = document.getElementById('weight-latest-line');
+  const weightTrendCanvas = document.getElementById('weight-trend-chart');
+  const weightTrendCtx = weightTrendCanvas.getContext('2d');
+  const editGoalWeightBtn = document.getElementById('edit-goal-weight-btn');
+  const goalWeightForm = document.getElementById('goal-weight-form');
+  const goalWeightInput = document.getElementById('goal-weight-input');
+  const saveGoalWeightBtn = document.getElementById('save-goal-weight-btn');
 
   // Looks up a saved food by name (case/whitespace-insensitive) — this is the
   // "did we already learn this food's nutrition?" check.
@@ -935,6 +1027,7 @@
     renderMonthly();
     renderYearly();
     renderFoods();
+    renderWeightView();
   }
 
   // Walks backward one day at a time from today, counting while each day was
@@ -1644,6 +1737,276 @@
     return saved ? Number(saved) : null;
   }
 
+  function saveWeighIns() {
+    localStorage.setItem('calorie-weigh-ins', JSON.stringify(weighIns));
+  }
+
+  function loadWeighIns() {
+    const saved = localStorage.getItem('calorie-weigh-ins');
+    return saved ? JSON.parse(saved) : [];
+  }
+
+  function saveGoalWeight() {
+    localStorage.setItem('calorie-goal-weight', goalWeight === null ? '' : String(goalWeight));
+  }
+
+  function loadGoalWeight() {
+    const saved = localStorage.getItem('calorie-goal-weight');
+    return saved ? Number(saved) : null;
+  }
+
+  function formatWeightDate(dateStr) {
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  function renderWeightView() {
+    renderWeighInsList();
+    renderWeightLatestLine();
+    drawWeightTrendChart();
+  }
+
+  function renderWeighInsList() {
+    weighInsListEl.innerHTML = '';
+
+    if (weighIns.length === 0) {
+      const note = document.createElement('li');
+      note.className = 'empty-note';
+      note.style.border = 'none';
+      note.textContent = 'No weigh-ins logged yet.';
+      weighInsListEl.appendChild(note);
+      return;
+    }
+
+    const sortedNewestFirst = weighIns.slice().sort(function (a, b) {
+      return b.date.localeCompare(a.date);
+    });
+
+    sortedNewestFirst.forEach(function (weighIn) {
+      const li = document.createElement('li');
+      const main = document.createElement('div');
+      main.className = 'entry-main';
+
+      const label = document.createElement('span');
+      label.className = 'entry-name';
+      label.textContent = weighIn.date;
+
+      const value = document.createElement('span');
+      value.className = 'entry-cal';
+      value.textContent = round1(weighIn.weight) + ' kg';
+
+      const actions = document.createElement('div');
+      actions.className = 'entry-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', function () {
+        startEditWeighIn(weighIn.id);
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'delete-btn';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', function () {
+        deleteWeighIn(weighIn.id);
+      });
+
+      actions.appendChild(editBtn);
+      actions.appendChild(deleteBtn);
+      main.appendChild(label);
+      main.appendChild(value);
+      main.appendChild(actions);
+      li.appendChild(main);
+      weighInsListEl.appendChild(li);
+    });
+  }
+
+  function renderWeightLatestLine() {
+    if (weighIns.length === 0) {
+      weightLatestLineEl.textContent = '';
+      return;
+    }
+
+    const sortedOldestFirst = weighIns.slice().sort(function (a, b) {
+      return a.date.localeCompare(b.date);
+    });
+    const latest = sortedOldestFirst[sortedOldestFirst.length - 1];
+    let text = round1(latest.weight) + ' kg';
+
+    if (goalWeight !== null) {
+      text += ' · ' + round1(Math.abs(latest.weight - goalWeight)) + ' kg to go';
+    }
+
+    weightLatestLineEl.textContent = text;
+  }
+
+  function startEditWeighIn(id) {
+    const weighIn = weighIns.find(function (w) { return w.id === id; });
+    weightDateInput.value = weighIn.date;
+    weightValueInput.value = weighIn.weight;
+    editingWeighInId = id;
+    weightSubmitBtn.textContent = 'Save';
+    weightDateInput.focus();
+  }
+
+  function deleteWeighIn(id) {
+    weighIns = weighIns.filter(function (w) { return w.id !== id; });
+
+    if (editingWeighInId === id) {
+      editingWeighInId = null;
+      weightSubmitBtn.textContent = 'Log';
+      weightForm.reset();
+      weightDateInput.value = getTodayDate();
+    }
+
+    saveWeighIns();
+    renderWeightView();
+  }
+
+  weightForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+
+    const date = weightDateInput.value;
+    const weight = Number(weightValueInput.value);
+
+    if (editingWeighInId !== null) {
+      const weighIn = weighIns.find(function (w) { return w.id === editingWeighInId; });
+      weighIn.date = date;
+      weighIn.weight = weight;
+      editingWeighInId = null;
+      weightSubmitBtn.textContent = 'Log';
+    } else {
+      weighIns.push({ id: crypto.randomUUID(), date: date, weight: weight });
+    }
+
+    saveWeighIns();
+    renderWeightView();
+
+    weightForm.reset();
+    weightDateInput.value = getTodayDate();
+  });
+
+  weightDateInput.value = getTodayDate();
+
+  editGoalWeightBtn.addEventListener('click', function () {
+    goalWeightInput.value = goalWeight === null ? '' : goalWeight;
+    goalWeightForm.classList.remove('hidden');
+    editGoalWeightBtn.classList.add('hidden');
+    goalWeightInput.focus();
+  });
+
+  saveGoalWeightBtn.addEventListener('click', function () {
+    goalWeight = parseOptionalTarget(goalWeightInput.value);
+    saveGoalWeight();
+    renderWeightView();
+    goalWeightForm.classList.add('hidden');
+    editGoalWeightBtn.classList.remove('hidden');
+  });
+
+  // Unlike the calorie bar chart, this axis deliberately does NOT start at
+  // zero — body weight only ever moves within a small relative range, so a
+  // zero-based scale would squash the whole trend into an unreadable sliver
+  // near the top of the chart.
+  function drawWeightTrendChart() {
+    const styles = getComputedStyle(document.documentElement);
+    const mossColor = styles.getPropertyValue('--moss').trim();
+    const goldColor = styles.getPropertyValue('--gold').trim();
+    const inkSoftColor = styles.getPropertyValue('--ink-soft').trim();
+
+    const width = weightTrendCanvas.width;
+    const height = weightTrendCanvas.height;
+    const paddingLeft = 8;
+    const paddingRight = 8;
+    const paddingTop = 16;
+    const paddingBottom = 22;
+    const plotWidth = width - paddingLeft - paddingRight;
+    const plotHeight = height - paddingTop - paddingBottom;
+
+    weightTrendCtx.clearRect(0, 0, width, height);
+
+    const sortedOldestFirst = weighIns.slice().sort(function (a, b) {
+      return a.date.localeCompare(b.date);
+    });
+    const weights = sortedOldestFirst.map(function (w) { return w.weight; });
+    const allValues = goalWeight !== null ? weights.concat([goalWeight]) : weights;
+
+    if (allValues.length === 0) {
+      return;
+    }
+
+    const rawMin = Math.min.apply(null, allValues);
+    const rawMax = Math.max.apply(null, allValues);
+    const padding = Math.max((rawMax - rawMin) * 0.15, 1);
+    const chartMin = rawMin - padding;
+    const chartMax = rawMax + padding;
+
+    function yFor(value) {
+      return paddingTop + plotHeight * (1 - (value - chartMin) / (chartMax - chartMin));
+    }
+
+    if (goalWeight !== null) {
+      const goalY = yFor(goalWeight);
+      weightTrendCtx.strokeStyle = goldColor;
+      weightTrendCtx.setLineDash([4, 4]);
+      weightTrendCtx.lineWidth = 1;
+      weightTrendCtx.beginPath();
+      weightTrendCtx.moveTo(paddingLeft, goalY);
+      weightTrendCtx.lineTo(width - paddingRight, goalY);
+      weightTrendCtx.stroke();
+      weightTrendCtx.setLineDash([]);
+    }
+
+    if (sortedOldestFirst.length === 0) {
+      return;
+    }
+
+    const slot = sortedOldestFirst.length > 1 ? plotWidth / (sortedOldestFirst.length - 1) : 0;
+
+    function xFor(index) {
+      return sortedOldestFirst.length === 1 ? paddingLeft + plotWidth / 2 : paddingLeft + index * slot;
+    }
+
+    if (sortedOldestFirst.length > 1) {
+      weightTrendCtx.strokeStyle = mossColor;
+      weightTrendCtx.lineWidth = 2;
+      weightTrendCtx.beginPath();
+      sortedOldestFirst.forEach(function (weighIn, index) {
+        const x = xFor(index);
+        const y = yFor(weighIn.weight);
+        if (index === 0) {
+          weightTrendCtx.moveTo(x, y);
+        } else {
+          weightTrendCtx.lineTo(x, y);
+        }
+      });
+      weightTrendCtx.stroke();
+    }
+
+    sortedOldestFirst.forEach(function (weighIn, index) {
+      const x = xFor(index);
+      const y = yFor(weighIn.weight);
+
+      weightTrendCtx.fillStyle = mossColor;
+      weightTrendCtx.beginPath();
+      weightTrendCtx.arc(x, y, 3, 0, Math.PI * 2);
+      weightTrendCtx.fill();
+
+      // Skip labels once there are enough points that dates would start
+      // overlapping — data-driven here instead of the calorie chart's fixed
+      // 7-day week, since weigh-ins come in at whatever cadence D logs them.
+      const labelStep = Math.ceil(sortedOldestFirst.length / 8);
+      const shouldLabel = sortedOldestFirst.length <= 8 || index % labelStep === 0;
+      if (shouldLabel) {
+        weightTrendCtx.fillStyle = inkSoftColor;
+        weightTrendCtx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+        weightTrendCtx.textAlign = 'center';
+        weightTrendCtx.fillText(formatWeightDate(weighIn.date), x, height - 6);
+      }
+    });
+  }
+
   editTargetBtn.addEventListener('click', function () {
     targetCaloriesInput.value = dailyTarget;
     targetProteinInput.value = proteinTarget === null ? '' : proteinTarget;
@@ -1688,14 +2051,17 @@
     todayViewEl.classList.toggle('hidden', view !== 'today');
     historyViewEl.classList.toggle('hidden', view !== 'history');
     foodsViewEl.classList.toggle('hidden', view !== 'foods');
+    weightViewEl.classList.toggle('hidden', view !== 'weight');
     todayTabBtn.classList.toggle('active', view === 'today');
     historyTabBtn.classList.toggle('active', view === 'history');
     foodsTabBtn.classList.toggle('active', view === 'foods');
+    weightTabBtn.classList.toggle('active', view === 'weight');
   }
 
   todayTabBtn.addEventListener('click', function () { showView('today'); });
   historyTabBtn.addEventListener('click', function () { showView('history'); });
   foodsTabBtn.addEventListener('click', function () { showView('foods'); });
+  weightTabBtn.addEventListener('click', function () { showView('weight'); });
 
   // 'input' fires on every keystroke (unlike 'change', which only fires once
   // the field loses focus) — that's what makes the list filter live as you type.
