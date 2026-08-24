@@ -163,6 +163,7 @@
   #food-weight,
   #food-unit,
   #entry-form button,
+  #food-search-input,
   .new-food-row input {
     font-family: var(--font-body);
     font-size: 15px;
@@ -171,6 +172,7 @@
   #food-name,
   #food-weight,
   #food-unit,
+  #food-search-input,
   .new-food-row input {
     background: var(--paper-raised);
     border: 1px solid var(--line);
@@ -182,6 +184,12 @@
   #food-name {
     flex: 1;
     min-width: 0;
+  }
+
+  #food-search-input {
+    display: block;
+    width: 100%;
+    margin-bottom: 16px;
   }
 
   #food-weight {
@@ -672,6 +680,7 @@
   </section>
 
   <section id="foods-view" class="hidden">
+    <input type="text" id="food-search-input" placeholder="Search foods...">
     <ul id="foods-list" class="row-list"></ul>
   </section>
 
@@ -719,6 +728,7 @@
   let foods = loadFoods();
   let editingId = null;
   let editingFoodId = null;
+  let foodSearchQuery = '';
   let dailyTarget = loadDailyTarget();
   // Macro targets are optional (null = "not tracking this one") — unlike the
   // calorie target, which has always been required and defaults to 1850.
@@ -784,6 +794,7 @@
   const trendCanvas = document.getElementById('trend-chart');
   const trendCtx = trendCanvas.getContext('2d');
   const foodsListEl = document.getElementById('foods-list');
+  const foodSearchInput = document.getElementById('food-search-input');
   const copySummaryBtn = document.getElementById('copy-summary-btn');
   const exportBtn = document.getElementById('export-btn');
   const importBtn = document.getElementById('import-btn');
@@ -1425,9 +1436,22 @@
       return;
     }
 
-    const sortedFoods = foods.slice().sort(function (a, b) {
-      return a.name.localeCompare(b.name);
-    });
+    // .filter() already returns a fresh array, so chaining .sort() straight
+    // onto it is safe — no need for the .slice() copy that would be required
+    // before sorting the original foods array in place.
+    const query = foodSearchQuery.trim().toLowerCase();
+    const sortedFoods = foods
+      .filter(function (food) { return food.name.toLowerCase().includes(query); })
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
+
+    if (sortedFoods.length === 0) {
+      const note = document.createElement('li');
+      note.className = 'empty-note';
+      note.style.border = 'none';
+      note.textContent = 'No foods match "' + foodSearchQuery.trim() + '".';
+      foodsListEl.appendChild(note);
+      return;
+    }
 
     sortedFoods.forEach(function (food) {
       const li = document.createElement('li');
@@ -1672,6 +1696,13 @@
   todayTabBtn.addEventListener('click', function () { showView('today'); });
   historyTabBtn.addEventListener('click', function () { showView('history'); });
   foodsTabBtn.addEventListener('click', function () { showView('foods'); });
+
+  // 'input' fires on every keystroke (unlike 'change', which only fires once
+  // the field loses focus) — that's what makes the list filter live as you type.
+  foodSearchInput.addEventListener('input', function () {
+    foodSearchQuery = foodSearchInput.value;
+    renderFoods();
+  });
 
   // The downloads capability resolves async and may not exist at all in
   // every view — keep the button hidden until we know it's actually usable,
