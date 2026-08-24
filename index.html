@@ -6,6 +6,16 @@
 </head>
 <body>
 <title>Calorie Deficit Log</title>
+<!--
+  These four tags only do anything on the real GitHub Pages deploy, which
+  actually serves manifest.json/icon files/sw.js at this same origin — on the
+  Claude Artifact they're just harmless dead links (this file is one shared
+  source for both deploys, see Learning to Code in the vault).
+-->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#4b6b45">
 <style>
   :root {
     --paper: #f6f4ef;
@@ -1898,6 +1908,16 @@
       copySummaryBtn.textContent = originalLabel;
     }, 2000);
   });
+
+  // Registers the service worker so the app keeps working with no signal.
+  // Only real on the GitHub Pages deploy — inside the Claude Artifact's
+  // sandboxed iframe, service worker registration isn't available at all
+  // (or is blocked), so this quietly does nothing there instead of erroring.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () {
+      // Expected to fail inside the Artifact's iframe — nothing to do about it.
+    });
+  }
 
   render();
 </script>
