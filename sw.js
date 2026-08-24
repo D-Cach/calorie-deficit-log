@@ -1,6 +1,6 @@
 // Service worker: runs separately from the page, in the background, even
 // when no tab is open — this is what makes offline support possible at all.
-const CACHE_NAME = 'calorie-deficit-log-v1';
+const CACHE_NAME = 'calorie-deficit-log-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -38,9 +38,18 @@ self.addEventListener('activate', function (event) {
 // when online (so a code update shows up immediately, no stale-cache
 // surprises), and only fall back to whatever's cached when the network
 // request fails outright — i.e. no signal.
+//
+// { cache: 'no-store' } matters here specifically: a plain fetch() still
+// honors the *browser's own* HTTP cache (GitHub Pages serves this site with
+// a 10-minute Cache-Control), so without this, "network-first" could still
+// silently hand back a stale response for up to 10 minutes even while
+// online — defeating the entire point of choosing network-first. This
+// forces every fetch to actually hit the network, bypassing that layer
+// (separate from — and not affecting — this service worker's own Cache
+// Storage below, which is the real offline fallback).
 self.addEventListener('fetch', function (event) {
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-store' })
       .then(function (response) {
         const responseCopy = response.clone();
         caches.open(CACHE_NAME).then(function (cache) {
