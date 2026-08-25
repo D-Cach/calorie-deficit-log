@@ -632,8 +632,11 @@
         <button type="submit">Add</button>
       </div>
       <div id="new-food-fields" class="new-food-fields hidden">
-        <p class="new-food-label">New food — nutrition per 100g:</p>
+        <p class="new-food-label">New food — nutrition per this amount:</p>
         <div class="new-food-row">
+          <label>Per (g/mL)
+            <input type="number" id="new-food-per" step="1" min="1" max="999" value="100">
+          </label>
           <label>Calories
             <input type="number" id="new-food-calories" step="any" min="0">
           </label>
@@ -845,6 +848,7 @@
   const weightInput = document.getElementById('food-weight');
   const unitSelect = document.getElementById('food-unit');
   const newFoodFieldsEl = document.getElementById('new-food-fields');
+  const newPerInput = document.getElementById('new-food-per');
   const newCaloriesInput = document.getElementById('new-food-calories');
   const newProteinInput = document.getElementById('new-food-protein');
   const newCarbsInput = document.getElementById('new-food-carbs');
@@ -911,12 +915,14 @@
     return foods.find(function (f) { return f.name.trim().toLowerCase() === key; }) || null;
   }
 
-  // Scales a food's saved per-100g nutrition to whatever weight was actually
-  // logged — this is what makes the math "automatic" for any weight, not just
-  // one fixed amount.
+  // Scales a food's saved nutrition (per whatever amount it was recorded
+  // against — the label's serving size, not always 100) to whatever weight
+  // was actually logged — this is what makes the math "automatic" for any
+  // weight, not just one fixed amount. Older foods saved before per-amount
+  // was editable default to 100 via the fallback.
   function calcNutrition(food, weight, unit) {
     const grams = unit === 'oz' ? weight * OZ_TO_G : weight;
-    const ratio = grams / 100;
+    const ratio = grams / (food.perGrams || 100);
     return {
       calories: Math.round(food.caloriesPer100g * ratio),
       protein: round1(food.proteinPer100g * ratio),
@@ -935,6 +941,7 @@
     const name = nameInput.value.trim();
     const isNewFood = !!name && !findFood(name);
     newFoodFieldsEl.classList.toggle('hidden', !isNewFood);
+    newPerInput.required = isNewFood;
     newCaloriesInput.required = isNewFood;
   }
 
@@ -952,6 +959,7 @@
       food = {
         id: crypto.randomUUID(),
         name: name,
+        perGrams: Number(newPerInput.value) || 100,
         caloriesPer100g: Number(newCaloriesInput.value) || 0,
         proteinPer100g: Number(newProteinInput.value) || 0,
         carbsPer100g: Number(newCarbsInput.value) || 0,
@@ -1599,27 +1607,29 @@
 
   function formatFoodMacros(food) {
     return Math.round(food.caloriesPer100g) + ' kcal · ' + round1(food.proteinPer100g) + 'g protein · ' +
-      round1(food.carbsPer100g) + 'g carbs · ' + round1(food.fatPer100g) + 'g fat — per 100g';
+      round1(food.carbsPer100g) + 'g carbs · ' + round1(food.fatPer100g) + 'g fat — per ' + (food.perGrams || 100) + 'g';
   }
 
-  // Builds an inline edit form for one food row: same "nutrition per 100g"
-  // fields as the new-food box on the log form, just reused here for editing.
+  // Builds an inline edit form for one food row: same "nutrition per this
+  // amount" fields as the new-food box on the log form, just reused here for editing.
   function buildFoodEditForm(food) {
     const wrap = document.createElement('div');
     wrap.className = 'new-food-fields';
 
     const heading = document.createElement('p');
     heading.className = 'new-food-label';
-    heading.textContent = 'Editing ' + food.name + ' — nutrition per 100g:';
+    heading.textContent = 'Editing ' + food.name + ' — nutrition per this amount:';
 
     const row = document.createElement('div');
     row.className = 'new-food-row';
 
+    const perField = buildLabeledInput('Per (g/mL)', food.perGrams || 100, { step: '1', min: '1', max: '999' });
     const calField = buildLabeledInput('Calories', food.caloriesPer100g);
     const proteinField = buildLabeledInput('Protein (g)', food.proteinPer100g);
     const carbsField = buildLabeledInput('Carbs (g)', food.carbsPer100g);
     const fatField = buildLabeledInput('Fat (g)', food.fatPer100g);
 
+    row.appendChild(perField.wrapper);
     row.appendChild(calField.wrapper);
     row.appendChild(proteinField.wrapper);
     row.appendChild(carbsField.wrapper);
@@ -1632,6 +1642,7 @@
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
     saveBtn.addEventListener('click', function () {
+      food.perGrams = Number(perField.input.value) || 100;
       food.caloriesPer100g = Number(calField.input.value) || 0;
       food.proteinPer100g = Number(proteinField.input.value) || 0;
       food.carbsPer100g = Number(carbsField.input.value) || 0;
@@ -1658,14 +1669,17 @@
     return wrap;
   }
 
-  function buildLabeledInput(labelText, value) {
+  function buildLabeledInput(labelText, value, options) {
     const label = document.createElement('label');
     label.textContent = labelText;
 
     const input = document.createElement('input');
     input.type = 'number';
-    input.step = 'any';
-    input.min = '0';
+    input.step = (options && options.step) || 'any';
+    input.min = (options && options.min) || '0';
+    if (options && options.max) {
+      input.max = options.max;
+    }
     input.value = value;
     label.appendChild(input);
 
