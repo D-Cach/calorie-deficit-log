@@ -167,6 +167,11 @@
   #weight-date-input,
   #weight-value-input,
   #weight-form button,
+  #meal-name-input,
+  #meal-food-name,
+  #meal-food-weight,
+  #meal-food-unit,
+  #add-meal-ingredient-btn,
   .new-food-row input {
     font-family: var(--font-body);
     font-size: 15px;
@@ -178,6 +183,10 @@
   #food-search-input,
   #weight-date-input,
   #weight-value-input,
+  #meal-name-input,
+  #meal-food-name,
+  #meal-food-weight,
+  #meal-food-unit,
   .new-food-row input {
     background: var(--paper-raised);
     border: 1px solid var(--line);
@@ -186,7 +195,8 @@
     color: var(--ink);
   }
 
-  #food-name {
+  #food-name,
+  #meal-food-name {
     flex: 1;
     min-width: 0;
   }
@@ -201,18 +211,21 @@
     width: 150px;
   }
 
-  #food-search-input {
+  #food-search-input,
+  #meal-name-input {
     display: block;
     width: 100%;
     margin-bottom: 16px;
   }
 
-  #food-weight {
+  #food-weight,
+  #meal-food-weight {
     width: 84px;
     font-variant-numeric: tabular-nums;
   }
 
-  #food-unit {
+  #food-unit,
+  #meal-food-unit {
     width: 68px;
   }
 
@@ -281,6 +294,21 @@
   }
 
   #weight-form button[type="submit"]:hover {
+    background: var(--moss-deep);
+  }
+
+  #add-meal-ingredient-btn {
+    background: var(--moss);
+    color: var(--paper-raised);
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  #add-meal-ingredient-btn:hover {
     background: var(--moss-deep);
   }
 
@@ -653,6 +681,53 @@
       </div>
     </form>
 
+    <div class="target-settings">
+      <button type="button" id="toggle-meal-builder-btn" class="ghost-btn">Build a meal</button>
+      <div id="meal-builder-fields" class="new-food-fields hidden">
+        <p class="new-food-label">Meal name</p>
+        <input type="text" id="meal-name-input" placeholder="e.g. Chicken rice bowl">
+
+        <p class="new-food-label">Add an ingredient</p>
+        <div class="form-row">
+          <input type="text" id="meal-food-name" placeholder="Food name" list="food-suggestions">
+          <input type="number" id="meal-food-weight" placeholder="Weight" step="any" min="0">
+          <select id="meal-food-unit">
+            <option value="g" selected>g</option>
+            <option value="oz">oz</option>
+            <option value="mL">mL</option>
+          </select>
+          <button type="button" id="add-meal-ingredient-btn">Add</button>
+        </div>
+        <div id="meal-new-food-fields" class="new-food-fields hidden">
+          <p class="new-food-label">New food — nutrition per this amount:</p>
+          <div class="new-food-row">
+            <label>Per (g/mL)
+              <input type="number" id="meal-new-food-per" step="1" min="1" max="999" value="100">
+            </label>
+            <label>Calories
+              <input type="number" id="meal-new-food-calories" step="any" min="0">
+            </label>
+            <label>Protein (g)
+              <input type="number" id="meal-new-food-protein" step="any" min="0">
+            </label>
+            <label>Carbs (g)
+              <input type="number" id="meal-new-food-carbs" step="any" min="0">
+            </label>
+            <label>Fat (g)
+              <input type="number" id="meal-new-food-fat" step="any" min="0">
+            </label>
+          </div>
+        </div>
+
+        <ul id="meal-ingredients-list" class="row-list"></ul>
+
+        <div class="entry-actions">
+          <button type="button" id="log-meal-btn">Log meal</button>
+          <button type="button" id="cancel-meal-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <ul id="entry-list" class="row-list"></ul>
 
     <div id="totals">
@@ -803,6 +878,9 @@
   let foods = loadFoods();
   let editingId = null;
   let editingFoodId = null;
+  // Ingredients being assembled in the meal builder before "Log meal" rolls
+  // them into one combined entry — not saved to entries until that click.
+  let mealIngredients = [];
   let foodSearchQuery = '';
   let dailyTarget = loadDailyTarget();
   // Macro targets are optional (null = "not tracking this one") — unlike the
@@ -853,6 +931,22 @@
   const newProteinInput = document.getElementById('new-food-protein');
   const newCarbsInput = document.getElementById('new-food-carbs');
   const newFatInput = document.getElementById('new-food-fat');
+  const toggleMealBuilderBtn = document.getElementById('toggle-meal-builder-btn');
+  const mealBuilderFieldsEl = document.getElementById('meal-builder-fields');
+  const mealNameInput = document.getElementById('meal-name-input');
+  const mealFoodNameInput = document.getElementById('meal-food-name');
+  const mealFoodWeightInput = document.getElementById('meal-food-weight');
+  const mealFoodUnitSelect = document.getElementById('meal-food-unit');
+  const addMealIngredientBtn = document.getElementById('add-meal-ingredient-btn');
+  const mealNewFoodFieldsEl = document.getElementById('meal-new-food-fields');
+  const mealNewPerInput = document.getElementById('meal-new-food-per');
+  const mealNewCaloriesInput = document.getElementById('meal-new-food-calories');
+  const mealNewProteinInput = document.getElementById('meal-new-food-protein');
+  const mealNewCarbsInput = document.getElementById('meal-new-food-carbs');
+  const mealNewFatInput = document.getElementById('meal-new-food-fat');
+  const mealIngredientsListEl = document.getElementById('meal-ingredients-list');
+  const logMealBtn = document.getElementById('log-meal-btn');
+  const cancelMealBtn = document.getElementById('cancel-meal-btn');
   const submitBtn = form.querySelector('button[type="submit"]');
   const listEl = document.getElementById('entry-list');
   const totalEl = document.getElementById('total-calories');
@@ -1028,6 +1122,179 @@
     render();
   }
 
+  // Meal builder — assembles several foods into mealIngredients (in-memory,
+  // not saved yet) before "Log meal" rolls them into a single combined entry.
+  // Reuses findFood/calcNutrition so an ingredient's math works exactly like
+  // a regular logged food, per-amount basis and all.
+  function updateMealFoodFieldsVisibility() {
+    const name = mealFoodNameInput.value.trim();
+    const isNewFood = !!name && !findFood(name);
+    mealNewFoodFieldsEl.classList.toggle('hidden', !isNewFood);
+  }
+
+  mealFoodNameInput.addEventListener('input', updateMealFoodFieldsVisibility);
+
+  function renderMealIngredientsList() {
+    mealIngredientsListEl.innerHTML = '';
+
+    if (mealIngredients.length === 0) {
+      const note = document.createElement('li');
+      note.className = 'empty-note';
+      note.style.border = 'none';
+      note.textContent = 'No ingredients added yet.';
+      mealIngredientsListEl.appendChild(note);
+      return;
+    }
+
+    mealIngredients.forEach(function (ingredient, index) {
+      const li = document.createElement('li');
+      const main = document.createElement('div');
+      main.className = 'entry-main';
+
+      const label = document.createElement('span');
+      label.className = 'entry-name';
+      label.textContent = ingredient.name;
+
+      const weight = document.createElement('span');
+      weight.className = 'entry-weight';
+      weight.textContent = formatWeight(ingredient.weight, ingredient.unit);
+
+      const cal = document.createElement('span');
+      cal.className = 'entry-cal';
+      cal.textContent = ingredient.calories + ' kcal';
+
+      const actions = document.createElement('div');
+      actions.className = 'entry-actions';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'delete-btn';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', function () {
+        mealIngredients.splice(index, 1);
+        renderMealIngredientsList();
+      });
+
+      actions.appendChild(removeBtn);
+      main.appendChild(label);
+      main.appendChild(weight);
+      main.appendChild(cal);
+      main.appendChild(actions);
+      li.appendChild(main);
+      mealIngredientsListEl.appendChild(li);
+    });
+  }
+
+  addMealIngredientBtn.addEventListener('click', function () {
+    const name = mealFoodNameInput.value.trim();
+    const weight = Number(mealFoodWeightInput.value);
+    const unit = mealFoodUnitSelect.value;
+
+    if (!name || !weight || weight <= 0) {
+      return;
+    }
+
+    let food = findFood(name);
+    if (!food) {
+      food = {
+        id: crypto.randomUUID(),
+        name: name,
+        perGrams: Number(mealNewPerInput.value) || 100,
+        caloriesPer100g: Number(mealNewCaloriesInput.value) || 0,
+        proteinPer100g: Number(mealNewProteinInput.value) || 0,
+        carbsPer100g: Number(mealNewCarbsInput.value) || 0,
+        fatPer100g: Number(mealNewFatInput.value) || 0
+      };
+      foods.push(food);
+      saveFoods();
+      renderFoodSuggestions();
+    }
+
+    const nutrition = calcNutrition(food, weight, unit);
+    mealIngredients.push({
+      name: name,
+      weight: weight,
+      unit: unit,
+      calories: nutrition.calories,
+      protein: nutrition.protein,
+      carbs: nutrition.carbs,
+      fat: nutrition.fat
+    });
+
+    renderMealIngredientsList();
+
+    mealFoodNameInput.value = '';
+    mealFoodWeightInput.value = '';
+    mealNewCaloriesInput.value = '';
+    mealNewProteinInput.value = '';
+    mealNewCarbsInput.value = '';
+    mealNewFatInput.value = '';
+    mealNewPerInput.value = '100';
+    mealNewFoodFieldsEl.classList.add('hidden');
+    mealFoodNameInput.focus();
+  });
+
+  function resetMealBuilder() {
+    mealIngredients = [];
+    mealNameInput.value = '';
+    mealFoodNameInput.value = '';
+    mealFoodWeightInput.value = '';
+    mealFoodUnitSelect.value = 'g';
+    mealNewCaloriesInput.value = '';
+    mealNewProteinInput.value = '';
+    mealNewCarbsInput.value = '';
+    mealNewFatInput.value = '';
+    mealNewPerInput.value = '100';
+    mealNewFoodFieldsEl.classList.add('hidden');
+    renderMealIngredientsList();
+  }
+
+  toggleMealBuilderBtn.addEventListener('click', function () {
+    mealBuilderFieldsEl.classList.remove('hidden');
+    toggleMealBuilderBtn.classList.add('hidden');
+  });
+
+  cancelMealBtn.addEventListener('click', function () {
+    resetMealBuilder();
+    mealBuilderFieldsEl.classList.add('hidden');
+    toggleMealBuilderBtn.classList.remove('hidden');
+  });
+
+  logMealBtn.addEventListener('click', function () {
+    const mealName = mealNameInput.value.trim();
+
+    if (!mealName || mealIngredients.length === 0) {
+      return;
+    }
+
+    const totals = mealIngredients.reduce(function (sum, ingredient) {
+      sum.calories += ingredient.calories;
+      sum.protein += ingredient.protein;
+      sum.carbs += ingredient.carbs;
+      sum.fat += ingredient.fat;
+      return sum;
+    }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+    entries.push({
+      id: crypto.randomUUID(),
+      name: mealName,
+      isMeal: true,
+      components: mealIngredients.slice(),
+      calories: totals.calories,
+      protein: round1(totals.protein),
+      carbs: round1(totals.carbs),
+      fat: round1(totals.fat),
+      date: TODAY
+    });
+
+    saveEntries();
+    render();
+
+    resetMealBuilder();
+    mealBuilderFieldsEl.classList.add('hidden');
+    toggleMealBuilderBtn.classList.remove('hidden');
+  });
+
   function render() {
     renderToday();
     renderStreak();
@@ -1132,7 +1399,9 @@
 
       const weight = document.createElement('span');
       weight.className = 'entry-weight';
-      weight.textContent = formatWeight(entry.weight, entry.unit);
+      weight.textContent = entry.isMeal
+        ? entry.components.length + (entry.components.length === 1 ? ' ingredient' : ' ingredients')
+        : formatWeight(entry.weight, entry.unit);
 
       const cal = document.createElement('span');
       cal.className = 'entry-cal';
@@ -1141,12 +1410,19 @@
       const actions = document.createElement('div');
       actions.className = 'entry-actions';
 
-      const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', function () {
-        startEdit(entry.id);
-      });
+      // Meals are compound entries (multiple ingredients rolled into one) —
+      // editing one in place would mean re-opening the builder pre-filled
+      // with its components, which is out of scope for this round. Delete
+      // and re-build is the supported path for fixing a logged meal.
+      if (!entry.isMeal) {
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', function () {
+          startEdit(entry.id);
+        });
+        actions.appendChild(editBtn);
+      }
 
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
@@ -1156,7 +1432,6 @@
         deleteEntry(entry.id);
       });
 
-      actions.appendChild(editBtn);
       actions.appendChild(deleteBtn);
       main.appendChild(label);
       main.appendChild(weight);
@@ -1169,6 +1444,18 @@
 
       li.appendChild(main);
       li.appendChild(macros);
+
+      // Shows what's actually in a meal, since the main row only shows the
+      // combined total — without this a meal would be an opaque black box.
+      if (entry.isMeal) {
+        const ingredientsLine = document.createElement('div');
+        ingredientsLine.className = 'entry-macros';
+        ingredientsLine.textContent = entry.components.map(function (c) {
+          return c.name + ' (' + formatWeight(c.weight, c.unit) + ')';
+        }).join(', ');
+        li.appendChild(ingredientsLine);
+      }
+
       listEl.appendChild(li);
     });
 
@@ -2311,7 +2598,12 @@
       lines.push('Nothing logged yet today.');
     } else {
       todaysEntries.forEach(function (entry) {
-        lines.push(entry.name + ' — ' + formatWeight(entry.weight, entry.unit) + ', ' + entry.calories + ' kcal');
+        if (entry.isMeal) {
+          const ingredientNames = entry.components.map(function (c) { return c.name; }).join(', ');
+          lines.push(entry.name + ' (meal: ' + ingredientNames + ') — ' + entry.calories + ' kcal');
+        } else {
+          lines.push(entry.name + ' — ' + formatWeight(entry.weight, entry.unit) + ', ' + entry.calories + ' kcal');
+        }
       });
     }
 
