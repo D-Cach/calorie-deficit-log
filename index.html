@@ -881,6 +881,7 @@
   // Ingredients being assembled in the meal builder before "Log meal" rolls
   // them into one combined entry — not saved to entries until that click.
   let mealIngredients = [];
+  let editingMealId = null;
   let foodSearchQuery = '';
   let dailyTarget = loadDailyTarget();
   // Macro targets are optional (null = "not tracking this one") — unlike the
@@ -906,7 +907,10 @@
       entry.date = TODAY;
       migrated = true;
     }
-    if (entry.weight === undefined) {
+    // Meals never have a top-level weight/unit (their components do instead),
+    // so without this guard every meal would look like a pre-migration entry
+    // and get its real macros overwritten with zeros on every page load.
+    if (!entry.isMeal && entry.weight === undefined) {
       // Entries logged before weight/macros existed — best guess is 0, not a crash.
       entry.weight = 0;
       entry.unit = 'g';
@@ -1118,6 +1122,12 @@
       form.reset();
     }
 
+    if (editingMealId === id) {
+      resetMealBuilder();
+      mealBuilderFieldsEl.classList.add('hidden');
+      toggleMealBuilderBtn.classList.remove('hidden');
+    }
+
     saveEntries();
     render();
   }
@@ -1235,6 +1245,8 @@
   });
 
   function resetMealBuilder() {
+    editingMealId = null;
+    logMealBtn.textContent = 'Log meal';
     mealIngredients = [];
     mealNameInput.value = '';
     mealFoodNameInput.value = '';
@@ -1247,6 +1259,21 @@
     mealNewPerInput.value = '100';
     mealNewFoodFieldsEl.classList.add('hidden');
     renderMealIngredientsList();
+  }
+
+  // Re-opens the builder pre-filled with an existing meal's name and
+  // ingredients so it can be changed and saved back in place, rather than
+  // deleted and rebuilt from scratch.
+  function startEditMeal(id) {
+    const entry = entries.find(function (e) { return e.id === id; });
+    editingMealId = id;
+    mealNameInput.value = entry.name;
+    mealIngredients = entry.components.slice();
+    renderMealIngredientsList();
+    mealBuilderFieldsEl.classList.remove('hidden');
+    toggleMealBuilderBtn.classList.add('hidden');
+    logMealBtn.textContent = 'Save meal';
+    mealNameInput.focus();
   }
 
   toggleMealBuilderBtn.addEventListener('click', function () {
@@ -1275,17 +1302,27 @@
       return sum;
     }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
 
-    entries.push({
-      id: crypto.randomUUID(),
-      name: mealName,
-      isMeal: true,
-      components: mealIngredients.slice(),
-      calories: totals.calories,
-      protein: round1(totals.protein),
-      carbs: round1(totals.carbs),
-      fat: round1(totals.fat),
-      date: TODAY
-    });
+    if (editingMealId !== null) {
+      const entry = entries.find(function (e) { return e.id === editingMealId; });
+      entry.name = mealName;
+      entry.components = mealIngredients.slice();
+      entry.calories = totals.calories;
+      entry.protein = round1(totals.protein);
+      entry.carbs = round1(totals.carbs);
+      entry.fat = round1(totals.fat);
+    } else {
+      entries.push({
+        id: crypto.randomUUID(),
+        name: mealName,
+        isMeal: true,
+        components: mealIngredients.slice(),
+        calories: totals.calories,
+        protein: round1(totals.protein),
+        carbs: round1(totals.carbs),
+        fat: round1(totals.fat),
+        date: TODAY
+      });
+    }
 
     saveEntries();
     render();
@@ -1410,19 +1447,17 @@
       const actions = document.createElement('div');
       actions.className = 'entry-actions';
 
-      // Meals are compound entries (multiple ingredients rolled into one) —
-      // editing one in place would mean re-opening the builder pre-filled
-      // with its components, which is out of scope for this round. Delete
-      // and re-build is the supported path for fixing a logged meal.
-      if (!entry.isMeal) {
-        const editBtn = document.createElement('button');
-        editBtn.type = 'button';
-        editBtn.textContent = 'Edit';
-        editBtn.addEventListener('click', function () {
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', function () {
+        if (entry.isMeal) {
+          startEditMeal(entry.id);
+        } else {
           startEdit(entry.id);
-        });
-        actions.appendChild(editBtn);
-      }
+        }
+      });
+      actions.appendChild(editBtn);
 
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
