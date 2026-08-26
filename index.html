@@ -874,6 +874,7 @@
       <input type="file" id="import-file-input" accept="application/json,.json" class="hidden">
       <button type="button" id="theme-btn" class="ghost-btn">Theme: System</button>
       <button type="button" id="reminder-btn" class="ghost-btn">Daily reminder: Off</button>
+      <button type="button" id="install-btn" class="ghost-btn hidden">Install app</button>
     </div>
     <div id="import-confirm" class="new-food-fields hidden">
       <p class="new-food-label" id="import-confirm-text"></p>
@@ -2930,6 +2931,39 @@
       // Expected to fail inside the Artifact's iframe — nothing to do about it.
     });
   }
+
+  const installBtn = document.getElementById('install-btn');
+  let deferredInstallPrompt = null;
+
+  // Fires when Chrome decides the page is installable — never inside the
+  // Artifact's sandboxed iframe (this event is top-frame-only by design), and
+  // never on Safari/iOS, which doesn't support this API at all. Capturing it
+  // instead of letting the browser show its own mini-banner is what lets us
+  // put a real "Install app" button in the footer instead.
+  window.addEventListener('beforeinstallprompt', function (event) {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    installBtn.classList.remove('hidden');
+  });
+
+  installBtn.addEventListener('click', async function () {
+    if (!deferredInstallPrompt) {
+      return;
+    }
+    installBtn.disabled = true;
+    deferredInstallPrompt.prompt();
+    const choice = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBtn.disabled = false;
+    if (choice.outcome === 'accepted') {
+      installBtn.classList.add('hidden');
+    }
+  });
+
+  window.addEventListener('appinstalled', function () {
+    installBtn.classList.add('hidden');
+    deferredInstallPrompt = null;
+  });
 
   function formatTimeLabel(hhmm) {
     const parts = hhmm.split(':');
