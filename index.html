@@ -836,6 +836,16 @@
       </div>
     </div>
 
+    <div class="trend-block">
+      <p class="trend-label">Monthly Averages</p>
+      <ul id="weight-monthly-list" class="stat-list"></ul>
+    </div>
+
+    <div class="trend-block">
+      <p class="trend-label">Yearly Averages</p>
+      <ul id="weight-yearly-list" class="stat-list"></ul>
+    </div>
+
     <p class="trend-label">Log</p>
     <ul id="weigh-ins-list" class="row-list"></ul>
   </section>
@@ -1030,6 +1040,8 @@
   const goalWeightForm = document.getElementById('goal-weight-form');
   const goalWeightInput = document.getElementById('goal-weight-input');
   const saveGoalWeightBtn = document.getElementById('save-goal-weight-btn');
+  const weightMonthlyListEl = document.getElementById('weight-monthly-list');
+  const weightYearlyListEl = document.getElementById('weight-yearly-list');
   const reminderBtn = document.getElementById('reminder-btn');
   const reminderForm = document.getElementById('reminder-form');
   const reminderTimeInput = document.getElementById('reminder-time-input');
@@ -2142,6 +2154,67 @@
     renderWeighInsList();
     renderWeightLatestLine();
     drawWeightTrendChart();
+    renderWeightMonthly();
+    renderWeightYearly();
+  }
+
+  // Groups weigh-ins by month/year, averaging the logged values directly —
+  // unlike groupAverages() for calories, there's no "over target" concept for
+  // body weight, so this skips the bar/color treatment entirely rather than
+  // forcing weight into a shape built for a different kind of number.
+  function groupWeightAverages(keyFn) {
+    const groups = {};
+    weighIns.forEach(function (w) {
+      const key = keyFn(w.date);
+      if (!groups[key]) {
+        groups[key] = { total: 0, count: 0 };
+      }
+      groups[key].total += w.weight;
+      groups[key].count += 1;
+    });
+    return groups;
+  }
+
+  function renderWeightStatList(container, groups, formatLabel, emptyText) {
+    container.innerHTML = '';
+
+    const keys = Object.keys(groups).sort().reverse();
+
+    if (keys.length === 0) {
+      const note = document.createElement('li');
+      note.className = 'empty-note';
+      note.style.border = 'none';
+      note.textContent = emptyText;
+      container.appendChild(note);
+      return;
+    }
+
+    keys.forEach(function (key) {
+      const group = groups[key];
+      const avg = group.total / group.count;
+
+      const li = document.createElement('li');
+
+      const name = document.createElement('span');
+      name.className = 'day-name';
+      name.textContent = formatLabel(key) + ' · ' + group.count + (group.count === 1 ? ' weigh-in' : ' weigh-ins');
+
+      const total = document.createElement('span');
+      total.className = 'day-total';
+      total.textContent = round1(avg) + ' kg avg';
+
+      li.appendChild(name);
+      li.appendChild(total);
+      container.appendChild(li);
+    });
+  }
+
+  function renderWeightMonthly() {
+    renderWeightStatList(weightMonthlyListEl, groupWeightAverages(monthKey), formatMonthLabel, 'No months logged yet.');
+  }
+
+  function renderWeightYearly() {
+    renderWeightStatList(weightYearlyListEl, groupWeightAverages(yearKey), function (key) { return key; }, 'No years logged yet.');
   }
 
   function renderWeighInsList() {
