@@ -508,6 +508,16 @@
     flex-shrink: 0;
   }
 
+  .remaining-line {
+    margin: 6px 0 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  .remaining-line.over {
+    color: var(--clay);
+  }
+
   .streak-line {
     margin: 10px 0 0;
     font-size: 13px;
@@ -747,6 +757,7 @@
         <span id="total-calories" class="num">0</span>
         <span class="target">/ <span id="target-value">1,850</span> kcal</span>
       </div>
+      <p class="remaining-line" id="remaining-line"></p>
       <div class="meter"><div class="meter-fill" id="meter-fill"></div></div>
       <p class="macro-totals" id="macro-totals">0g protein · 0g carbs · 0g fat</p>
       <div class="macro-chart-block">
@@ -1003,6 +1014,7 @@
   const macroLegendEl = document.getElementById('macro-legend');
   const streakLineEl = document.getElementById('streak-line');
   const meterFillEl = document.getElementById('meter-fill');
+  const remainingLineEl = document.getElementById('remaining-line');
   const editTargetBtn = document.getElementById('edit-target-btn');
   const targetForm = document.getElementById('target-form');
   const targetCaloriesInput = document.getElementById('target-calories-input');
@@ -1634,6 +1646,12 @@
     const pct = Math.min(total / dailyTarget, 1) * 100;
     meterFillEl.style.width = pct + '%';
     meterFillEl.classList.toggle('over', total > dailyTarget);
+
+    const remaining = dailyTarget - total;
+    remainingLineEl.textContent = remaining >= 0
+      ? remaining.toLocaleString() + ' kcal left today'
+      : Math.abs(remaining).toLocaleString() + ' kcal over today';
+    remainingLineEl.classList.toggle('over', remaining < 0);
   }
 
   function formatWeight(weight, unit) {
