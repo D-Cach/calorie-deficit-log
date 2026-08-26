@@ -687,6 +687,11 @@
       </div>
     </form>
 
+    <div id="recent-foods-block" class="hidden">
+      <p class="trend-label">Recent</p>
+      <ul id="recent-foods-list" class="row-list"></ul>
+    </div>
+
     <div class="target-settings">
       <button type="button" id="toggle-meal-builder-btn" class="ghost-btn">Build a meal</button>
       <div id="meal-builder-fields" class="new-food-fields hidden">
@@ -970,6 +975,8 @@
   const newProteinInput = document.getElementById('new-food-protein');
   const newCarbsInput = document.getElementById('new-food-carbs');
   const newFatInput = document.getElementById('new-food-fat');
+  const recentFoodsBlockEl = document.getElementById('recent-foods-block');
+  const recentFoodsListEl = document.getElementById('recent-foods-list');
   const toggleMealBuilderBtn = document.getElementById('toggle-meal-builder-btn');
   const mealBuilderFieldsEl = document.getElementById('meal-builder-fields');
   const mealNameInput = document.getElementById('meal-name-input');
@@ -1379,12 +1386,86 @@
   function render() {
     renderToday();
     renderStreak();
+    renderRecentFoods();
     renderHistory();
     renderTrend();
     renderMonthly();
     renderYearly();
     renderFoods();
     renderWeightView();
+  }
+
+  // Walks entries newest-first, skipping meals (no single weight/unit to
+  // prefill) and de-duping by name — a food logged many times only shows its
+  // most recent weight/unit, since that's the one most likely to still apply.
+  function getRecentFoods(limit) {
+    const seen = new Set();
+    const recent = [];
+    for (let i = entries.length - 1; i >= 0 && recent.length < limit; i--) {
+      const entry = entries[i];
+      if (entry.isMeal) {
+        continue;
+      }
+      const key = entry.name.trim().toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      recent.push(entry);
+    }
+    return recent;
+  }
+
+  // Fills the main entry form with a food's last-used weight/unit and selects
+  // the weight text so retyping it (e.g. eggs with vs. without yolk) is a
+  // single keystroke away — doesn't log anything itself, "Add" still does that.
+  function prefillEntryForm(name, weight, unit) {
+    editingId = null;
+    submitBtn.textContent = 'Add';
+    nameInput.value = name;
+    weightInput.value = weight;
+    unitSelect.value = unit;
+    updateFoodFieldsVisibility();
+    weightInput.focus();
+    weightInput.select();
+  }
+
+  function renderRecentFoods() {
+    recentFoodsListEl.innerHTML = '';
+
+    const recent = getRecentFoods(5);
+    recentFoodsBlockEl.classList.toggle('hidden', recent.length === 0);
+
+    recent.forEach(function (entry) {
+      const li = document.createElement('li');
+      const main = document.createElement('div');
+      main.className = 'entry-main';
+
+      const label = document.createElement('span');
+      label.className = 'entry-name';
+      label.textContent = entry.name;
+
+      const weight = document.createElement('span');
+      weight.className = 'entry-weight';
+      weight.textContent = formatWeight(entry.weight, entry.unit);
+
+      const actions = document.createElement('div');
+      actions.className = 'entry-actions';
+
+      const logAgainBtn = document.createElement('button');
+      logAgainBtn.type = 'button';
+      logAgainBtn.textContent = 'Log again';
+      logAgainBtn.addEventListener('click', function () {
+        prefillEntryForm(entry.name, entry.weight, entry.unit);
+      });
+
+      actions.appendChild(logAgainBtn);
+      main.appendChild(label);
+      main.appendChild(weight);
+      main.appendChild(actions);
+      li.appendChild(main);
+      recentFoodsListEl.appendChild(li);
+    });
   }
 
   // Walks backward one day at a time from today, counting while each day was
