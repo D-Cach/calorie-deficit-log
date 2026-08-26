@@ -2640,9 +2640,14 @@
     renderFoods();
   });
 
-  // The downloads capability resolves async and may not exist at all in
-  // every view — keep the button hidden until we know it's actually usable,
-  // per the "design for absence" rule for Artifact capabilities.
+  // The downloads capability resolves async and only exists inside the
+  // Claude Artifact's sandboxed iframe — keep the button hidden until we know
+  // it's actually usable there, per the "design for absence" rule for
+  // Artifact capabilities. Outside that iframe (the GitHub Pages deploy),
+  // window.claude never exists at all, so the button shows immediately and
+  // uses a plain browser download instead — the artifact's sandbox is what
+  // blocks that direct technique, which is why the capability exists there
+  // in the first place.
   let downloadsCapability = null;
 
   if (window.claude && typeof claude.use === 'function') {
@@ -2650,13 +2655,26 @@
       downloadsCapability = downloads;
       exportBtn.classList.toggle('hidden', !downloads);
     });
+  } else {
+    exportBtn.classList.remove('hidden');
+  }
+
+  // A throwaway <a download> link — the standard plain-browser-download
+  // technique, unavailable inside the Artifact's sandbox but the only thing
+  // needed outside it.
+  function downloadJsonFile(filename, text) {
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   exportBtn.addEventListener('click', async function () {
-    if (!downloadsCapability) {
-      return;
-    }
-
     const backup = {
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
@@ -2672,10 +2690,14 @@
     exportBtn.disabled = true;
 
     try {
-      await downloadsCapability.save({
-        filename: 'calorie-deficit-log-backup-' + TODAY + '.json',
-        data: JSON.stringify(backup, null, 2)
-      });
+      if (downloadsCapability) {
+        await downloadsCapability.save({
+          filename: 'calorie-deficit-log-backup-' + TODAY + '.json',
+          data: JSON.stringify(backup, null, 2)
+        });
+      } else {
+        downloadJsonFile('calorie-deficit-log-backup-' + TODAY + '.json', JSON.stringify(backup, null, 2));
+      }
       exportBtn.textContent = 'Saved!';
     } catch (err) {
       // 'declined' just means the viewer said no to the save prompt — not an error.
