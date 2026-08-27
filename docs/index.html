@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calorie Deficit Log has moved</title>
+<meta name="robots" content="noindex">
+<meta http-equiv="refresh" content="0; url=https://calorie-deficit-log.web.app/">
+<link rel="canonical" href="https://calorie-deficit-log.web.app/">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    background: #f6f4ef;
+    color: #23261f;
+    margin: 0;
+    padding: 56px 24px;
+    text-align: center;
+    line-height: 1.5;
+  }
+  a { color: #4b6b45; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1b1d17; color: #ece8db; }
+    a { color: #8bab7d; }
+  }
+</style>
+</head>
+<body>
+<p>This app has moved to <a href="https://calorie-deficit-log.web.app/">calorie-deficit-log.web.app</a>.</p>
+<p>Taking you there now&hellip;</p>
+<script>
+  // Tear down the old service worker + caches so this origin stops serving a
+  // stale copy of the app to anyone (or any installed PWA) that lands here.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      regs.forEach(function (r) { r.unregister(); });
+    });
+  }
+  if (window.caches && caches.keys) {
+    caches.keys().then(function (keys) {
+      keys.forEach(function (k) { caches.delete(k); });
+    });
+  }
+  // replace() so the dead URL doesn't sit in the back-button history.
+  location.replace('https://calorie-deficit-log.web.app/');
+</script>
+</body>
+</html>
