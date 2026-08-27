@@ -669,6 +669,7 @@
       </div>
     </div>
     <p class="empty-note hidden" id="auth-denied-note" style="border: none; padding: 4px 0 0;">This app is private — only D and Annelyn's Google accounts can sign in.</p>
+    <p class="empty-note hidden" id="sync-note" style="border: none; padding: 4px 0 0;"></p>
   </header>
 
   <nav class="tabs">
@@ -932,6 +933,17 @@
     signOut,
     onAuthStateChanged
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+  import {
+    initializeFirestore,
+    getFirestore,
+    persistentLocalCache,
+    persistentMultipleTabManager,
+    doc,
+    collection,
+    onSnapshot,
+    setDoc,
+    writeBatch
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyC8NtYpWSWpXx0nCIWIWg0QNFyDAok8edk",
@@ -946,9 +958,93 @@
   const auth = getAuth(firebaseApp);
   const googleProvider = new GoogleAuthProvider();
 
+  // Firestore with an on-disk cache so a signed-in user keeps working with no
+  // signal. If the browser blocks IndexedDB (private windows, storage off),
+  // fall back to the default in-memory instance rather than failing to load.
+  let db;
+  try {
+    db = initializeFirestore(firebaseApp, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    });
+  } catch (err) {
+    console.warn('Firestore on-disk cache unavailable, using memory cache', err);
+    db = getFirestore(firebaseApp);
+  }
+
   window.firebaseAuth = {
     signIn: () => signInWithPopup(auth, googleProvider),
     signOut: () => signOut(auth)
+  };
+
+  // Bridge to the classic script below. All synced data lives in four
+  // whole-slice docs under users/{uid}/data — entries/foods/weighIns each as
+  // { items: [...] }, settings as a plain field object — so it maps
+  // one-to-one onto the existing localStorage save functions.
+  const SLICE_DOCS = ['entries', 'foods', 'weighIns', 'settings'];
+
+  function sliceRef(uid, name) {
+    return doc(db, 'users', uid, 'data', name);
+  }
+
+  function wrapSlice(name, value) {
+    return name === 'settings' ? value : { items: value };
+  }
+
+  function unwrapSlice(name, data) {
+    if (!data) {
+      return name === 'settings' ? null : [];
+    }
+    return name === 'settings' ? data : (data.items || []);
+  }
+
+  window.firebaseDb = {
+    // Live subscription to all four docs at once. Calls onData for every
+    // snapshot with the current slices plus metadata flags; returns the
+    // unsubscribe function.
+    subscribe: function (uid, onData, onError) {
+      const dataCol = collection(db, 'users', uid, 'data');
+      return onSnapshot(dataCol, function (snap) {
+        const slices = { entries: [], foods: [], weighIns: [], settings: null };
+        let present = 0;
+        snap.forEach(function (docSnap) {
+          if (SLICE_DOCS.indexOf(docSnap.id) === -1) {
+            return;
+          }
+          present += 1;
+          slices[docSnap.id] = unwrapSlice(docSnap.id, docSnap.data());
+        });
+        onData({
+          entries: slices.entries,
+          foods: slices.foods,
+          weighIns: slices.weighIns,
+          settings: slices.settings,
+          isEmpty: present === 0,
+          hasPendingWrites: snap.metadata.hasPendingWrites,
+          fromCache: snap.metadata.fromCache
+        });
+      }, function (err) {
+        console.error('Firestore subscription error', err);
+        if (onError) {
+          onError(err);
+        }
+      });
+    },
+
+    // One slice doc — used by the per-slice save functions.
+    saveSlice: function (uid, name, value) {
+      return setDoc(sliceRef(uid, name), wrapSlice(name, value));
+    },
+
+    // All four docs in one atomic batch — used for the first-sign-in upload
+    // and the merge-up after adopting an existing account.
+    saveAll: function (uid, all) {
+      const batch = writeBatch(db);
+      batch.set(sliceRef(uid, 'entries'), wrapSlice('entries', all.entries));
+      batch.set(sliceRef(uid, 'foods'), wrapSlice('foods', all.foods));
+      batch.set(sliceRef(uid, 'weighIns'), wrapSlice('weighIns', all.weighIns));
+      batch.set(sliceRef(uid, 'settings'), wrapSlice('settings', all.settings));
+      return batch.commit();
+    }
   };
 
   onAuthStateChanged(auth, function (user) {
@@ -1004,6 +1100,17 @@
   // null = reminders off; otherwise an 'HH:MM' string checked against the
   // clock. Follows the same null-means-not-set pattern as goalWeight/targets.
   let reminderTime = loadReminderTime();
+
+  // Firestore sync state. currentUid is the signed-in user (null = signed
+  // out, localStorage only). firestoreReady flips true once the first
+  // snapshot has been handled — until then, writes stay local and get
+  // uploaded in bulk when that snapshot lands.
+  let currentUid = null;
+  let firestoreReady = false;
+  let unsubscribeFirestore = null;
+  // Guards the first-sign-in bulk upload so a cache-then-server pair of empty
+  // snapshots can't fire it twice.
+  let migrationAttempted = false;
 
   let migrated = false;
   entries.forEach(function (entry) {
@@ -1096,6 +1203,7 @@
   const importConfirmBtn = document.getElementById('import-confirm-btn');
   const importCancelBtn = document.getElementById('import-cancel-btn');
   const themeBtn = document.getElementById('theme-btn');
+  const syncNoteEl = document.getElementById('sync-note');
   const todayViewEl = document.getElementById('today-view');
   const historyViewEl = document.getElementById('history-view');
   const foodsViewEl = document.getElementById('foods-view');
@@ -2217,8 +2325,70 @@
     renderFoods();
   }
 
+  // --- Firestore sync (see the type="module" block up top) ----------------
+
+  // Pushes one slice to Firestore, but only when signed in and past the
+  // first snapshot. A plain no-op when signed out — that's what keeps the
+  // signed-out path identical to before this stage.
+  function syncSlice(name, value) {
+    if (!currentUid || !firestoreReady || !window.firebaseDb) {
+      return;
+    }
+    window.firebaseDb.saveSlice(currentUid, name, value).catch(function (err) {
+      console.error('Firestore save failed (' + name + ')', err);
+      showSyncNote('Sync failed — saved on this device.', true);
+    });
+  }
+
+  function collectSettings() {
+    return {
+      dailyTarget: dailyTarget,
+      proteinTarget: proteinTarget,
+      carbsTarget: carbsTarget,
+      fatTarget: fatTarget,
+      goalWeight: goalWeight
+    };
+  }
+
+  function syncSettings() {
+    syncSlice('settings', collectSettings());
+  }
+
+  let syncNoteTimer = null;
+
+  // Small status line under the sign-in bar. Errors stay until the next
+  // update; plain status messages clear themselves after a few seconds.
+  function showSyncNote(text, isError) {
+    if (!syncNoteEl) {
+      return;
+    }
+    syncNoteEl.textContent = text;
+    syncNoteEl.style.color = isError ? 'var(--clay)' : 'var(--ink-soft)';
+    syncNoteEl.classList.remove('hidden');
+    if (syncNoteTimer) {
+      clearTimeout(syncNoteTimer);
+      syncNoteTimer = null;
+    }
+    if (!isError) {
+      syncNoteTimer = setTimeout(function () {
+        syncNoteEl.classList.add('hidden');
+      }, 4000);
+    }
+  }
+
+  function hideSyncNote() {
+    if (syncNoteTimer) {
+      clearTimeout(syncNoteTimer);
+      syncNoteTimer = null;
+    }
+    if (syncNoteEl) {
+      syncNoteEl.classList.add('hidden');
+    }
+  }
+
   function saveEntries() {
     localStorage.setItem('calorie-entries', JSON.stringify(entries));
+    syncSlice('entries', entries);
   }
 
   function loadEntries() {
@@ -2228,6 +2398,7 @@
 
   function saveFoods() {
     localStorage.setItem('calorie-foods', JSON.stringify(foods));
+    syncSlice('foods', foods);
   }
 
   function loadFoods() {
@@ -2276,6 +2447,7 @@
 
   function saveWeighIns() {
     localStorage.setItem('calorie-weigh-ins', JSON.stringify(weighIns));
+    syncSlice('weighIns', weighIns);
   }
 
   function loadWeighIns() {
@@ -2507,6 +2679,7 @@
   saveGoalWeightBtn.addEventListener('click', function () {
     goalWeight = parseOptionalTarget(goalWeightInput.value);
     saveGoalWeight();
+    syncSettings();
     renderWeightView();
     goalWeightForm.classList.add('hidden');
     editGoalWeightBtn.classList.remove('hidden');
@@ -2686,6 +2859,7 @@
     saveProteinTarget();
     saveCarbsTarget();
     saveFatTarget();
+    syncSettings();
 
     render();
     targetForm.classList.add('hidden');
@@ -3064,6 +3238,143 @@
       signedInInfo.classList.add('hidden');
     }
   });
+
+  // Firestore sync lifecycle — driven by the same auth-changed event as the
+  // sign-in UI above, kept as its own listener so the sync concern and the
+  // header-UI concern stay separate.
+  window.addEventListener('auth-changed', function (event) {
+    const user = event.detail;
+    const signedIn = !!user && ALLOWED_EMAILS.includes(user.email);
+
+    if (signedIn && user.uid === currentUid) {
+      return; // already subscribed for this account
+    }
+
+    // Drop any existing subscription — covers both sign-out and switching
+    // accounts on the same device.
+    if (unsubscribeFirestore) {
+      unsubscribeFirestore();
+      unsubscribeFirestore = null;
+    }
+    firestoreReady = false;
+    migrationAttempted = false;
+
+    if (!signedIn) {
+      currentUid = null;
+      hideSyncNote();
+      return;
+    }
+
+    currentUid = user.uid;
+    if (!window.firebaseDb) {
+      return;
+    }
+    unsubscribeFirestore = window.firebaseDb.subscribe(
+      user.uid,
+      onFirestoreSnapshot,
+      function () {
+        showSyncNote('Sync error — changes are saved on this device only.', true);
+      }
+    );
+  });
+
+  // Merges in any local items whose id the remote set doesn't have — closes
+  // the gap where something logged in the second between sign-in and the
+  // first snapshot would otherwise be dropped when Firestore is adopted.
+  // Doesn't carry across deletions: an item deleted on a secondary device
+  // while signed out reappears on adopt (rare, and safe — never data loss).
+  function unionById(remote, local) {
+    const remoteIds = new Set(remote.map(function (r) { return r.id; }));
+    const localOnly = local.filter(function (item) { return item.id && !remoteIds.has(item.id); });
+    return { merged: remote.concat(localOnly), added: localOnly.length };
+  }
+
+  // Applies a settings object pulled from Firestore to the in-memory vars and
+  // mirrors each into localStorage. Never calls syncSettings() — that would
+  // echo a remote change straight back up.
+  function applySettings(s) {
+    if (!s) {
+      return;
+    }
+    if (typeof s.dailyTarget === 'number' && s.dailyTarget > 0) {
+      dailyTarget = s.dailyTarget;
+      saveDailyTarget();
+    }
+    proteinTarget = typeof s.proteinTarget === 'number' ? s.proteinTarget : null;
+    carbsTarget = typeof s.carbsTarget === 'number' ? s.carbsTarget : null;
+    fatTarget = typeof s.fatTarget === 'number' ? s.fatTarget : null;
+    goalWeight = typeof s.goalWeight === 'number' ? s.goalWeight : null;
+    saveProteinTarget();
+    saveCarbsTarget();
+    saveFatTarget();
+    saveGoalWeight();
+  }
+
+  function onFirestoreSnapshot(data) {
+    // Our own just-written change echoing straight back — the state is
+    // already in memory, so re-applying it would only force a redundant
+    // render (and could stomp an in-progress edit).
+    if (data.hasPendingWrites) {
+      firestoreReady = true;
+      return;
+    }
+
+    if (data.isEmpty) {
+      // First sign-in for this account — nothing stored yet. Push this
+      // device's log up so the account starts from real data, not empty.
+      firestoreReady = true;
+      const haveLocal = entries.length || foods.length || weighIns.length;
+      if (haveLocal && window.firebaseDb && !migrationAttempted) {
+        migrationAttempted = true;
+        window.firebaseDb.saveAll(currentUid, {
+          entries: entries,
+          foods: foods,
+          weighIns: weighIns,
+          settings: collectSettings()
+        }).then(function () {
+          showSyncNote('Synced this device’s log to your account.');
+        }).catch(function (err) {
+          console.error('Initial sync upload failed', err);
+          showSyncNote('Upload failed — your log is still safe on this device.', true);
+        });
+      }
+      return;
+    }
+
+    // Firestore has data — it's the source of truth now. Adopt it, folding
+    // in anything local-only by id, then mirror to localStorage so
+    // signed-out mode and offline both still show real data.
+    const eMerge = unionById(data.entries || [], entries);
+    const fMerge = unionById(data.foods || [], foods);
+    const wMerge = unionById(data.weighIns || [], weighIns);
+    entries = eMerge.merged;
+    foods = fMerge.merged;
+    weighIns = wMerge.merged;
+    applySettings(data.settings);
+
+    localStorage.setItem('calorie-entries', JSON.stringify(entries));
+    localStorage.setItem('calorie-foods', JSON.stringify(foods));
+    localStorage.setItem('calorie-weigh-ins', JSON.stringify(weighIns));
+
+    firestoreReady = true;
+
+    // If this device contributed anything the remote set was missing (or the
+    // remote had no settings doc yet), push the reconciled state back up once.
+    const addedBack = eMerge.added + fMerge.added + wMerge.added;
+    if ((addedBack || !data.settings) && window.firebaseDb) {
+      window.firebaseDb.saveAll(currentUid, {
+        entries: entries,
+        foods: foods,
+        weighIns: weighIns,
+        settings: collectSettings()
+      }).catch(function (err) {
+        console.error('Merge-up write failed', err);
+      });
+    }
+
+    showSyncNote(data.fromCache ? 'Showing your synced log (offline copy).' : 'Synced with your account.');
+    render();
+  }
 
   function formatTimeLabel(hhmm) {
     const parts = hhmm.split(':');
