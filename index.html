@@ -1111,6 +1111,11 @@
   // Guards the first-sign-in bulk upload so a cache-then-server pair of empty
   // snapshots can't fire it twice.
   let migrationAttempted = false;
+  // True only between subscribing and handling the first snapshot — the one
+  // window where local items missing from the account get folded in. After
+  // that the account is authoritative, so deletes and edits from any device
+  // propagate instead of being treated as "unsynced local work."
+  let pendingLocalReconcile = false;
 
   let migrated = false;
   entries.forEach(function (entry) {
@@ -3258,6 +3263,7 @@
     }
     firestoreReady = false;
     migrationAttempted = false;
+    pendingLocalReconcile = false;
 
     if (!signedIn) {
       currentUid = null;
@@ -3269,6 +3275,7 @@
     if (!window.firebaseDb) {
       return;
     }
+    pendingLocalReconcile = true;
     unsubscribeFirestore = window.firebaseDb.subscribe(
       user.uid,
       onFirestoreSnapshot,
@@ -3278,11 +3285,11 @@
     );
   });
 
-  // Merges in any local items whose id the remote set doesn't have — closes
-  // the gap where something logged in the second between sign-in and the
-  // first snapshot would otherwise be dropped when Firestore is adopted.
-  // Doesn't carry across deletions: an item deleted on a secondary device
-  // while signed out reappears on adopt (rare, and safe — never data loss).
+  // Merges in any local items whose id the remote set doesn't have. Used ONCE
+  // per sign-in (see pendingLocalReconcile) to catch items logged in the
+  // second between sign-in and the first snapshot. Not used after that — in
+  // steady state the account is authoritative so a delete on any device wins
+  // instead of being resurrected as "unsynced local work."
   function unionById(remote, local) {
     const remoteIds = new Set(remote.map(function (r) { return r.id; }));
     const localOnly = local.filter(function (item) { return item.id && !remoteIds.has(item.id); });
@@ -3323,6 +3330,7 @@
       // First sign-in for this account — nothing stored yet. Push this
       // device's log up so the account starts from real data, not empty.
       firestoreReady = true;
+      pendingLocalReconcile = false;
       const haveLocal = entries.length || foods.length || weighIns.length;
       if (haveLocal && window.firebaseDb && !migrationAttempted) {
         migrationAttempted = true;
@@ -3341,15 +3349,37 @@
       return;
     }
 
-    // Firestore has data — it's the source of truth now. Adopt it, folding
-    // in anything local-only by id, then mirror to localStorage so
-    // signed-out mode and offline both still show real data.
-    const eMerge = unionById(data.entries || [], entries);
-    const fMerge = unionById(data.foods || [], foods);
-    const wMerge = unionById(data.weighIns || [], weighIns);
-    entries = eMerge.merged;
-    foods = fMerge.merged;
-    weighIns = wMerge.merged;
+    // Firestore has data — it's the source of truth now.
+    if (pendingLocalReconcile) {
+      // One-time, right after sign-in: fold in anything this device logged
+      // that the account doesn't have yet (work done in the second between
+      // sign-in and this first snapshot). A merge-up write pushes those
+      // items — and a missing settings doc — back to the account once.
+      pendingLocalReconcile = false;
+      const eMerge = unionById(data.entries || [], entries);
+      const fMerge = unionById(data.foods || [], foods);
+      const wMerge = unionById(data.weighIns || [], weighIns);
+      entries = eMerge.merged;
+      foods = fMerge.merged;
+      weighIns = wMerge.merged;
+      const addedBack = eMerge.added + fMerge.added + wMerge.added;
+      if ((addedBack || !data.settings) && window.firebaseDb) {
+        window.firebaseDb.saveAll(currentUid, {
+          entries: entries,
+          foods: foods,
+          weighIns: weighIns,
+          settings: collectSettings()
+        }).catch(function (err) {
+          console.error('Reconcile write failed', err);
+        });
+      }
+    } else {
+      // Steady state — take the account's data as-is, so a delete or edit
+      // made on any device propagates here instead of being merged away.
+      entries = data.entries || [];
+      foods = data.foods || [];
+      weighIns = data.weighIns || [];
+    }
     applySettings(data.settings);
 
     localStorage.setItem('calorie-entries', JSON.stringify(entries));
@@ -3357,21 +3387,6 @@
     localStorage.setItem('calorie-weigh-ins', JSON.stringify(weighIns));
 
     firestoreReady = true;
-
-    // If this device contributed anything the remote set was missing (or the
-    // remote had no settings doc yet), push the reconciled state back up once.
-    const addedBack = eMerge.added + fMerge.added + wMerge.added;
-    if ((addedBack || !data.settings) && window.firebaseDb) {
-      window.firebaseDb.saveAll(currentUid, {
-        entries: entries,
-        foods: foods,
-        weighIns: weighIns,
-        settings: collectSettings()
-      }).catch(function (err) {
-        console.error('Merge-up write failed', err);
-      });
-    }
-
     showSyncNote(data.fromCache ? 'Showing your synced log (offline copy).' : 'Synced with your account.');
     render();
   }
