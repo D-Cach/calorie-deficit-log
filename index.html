@@ -114,6 +114,52 @@
     gap: 8px;
     margin-top: 10px;
     font-size: 13px;
+    flex-wrap: wrap;
+  }
+
+  .log-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-soft);
+  }
+
+  .log-switcher select {
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 4px 8px;
+  }
+
+  #readonly-banner {
+    margin: 8px 0 0;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--gold);
+    color: var(--paper-raised);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  /* Read-only mode (viewing the other person's log) — hide every surface that
+     would write. The per-row action buttons are hidden too; the mutation
+     handlers also bail on viewingUid as a backstop. */
+  .app.readonly #entry-form,
+  .app.readonly #recent-foods-block,
+  .app.readonly #toggle-meal-builder-btn,
+  .app.readonly #meal-builder-fields,
+  .app.readonly #edit-target-btn,
+  .app.readonly #target-form,
+  .app.readonly #weight-form,
+  .app.readonly #edit-goal-weight-btn,
+  .app.readonly #goal-weight-form,
+  .app.readonly #export-btn,
+  .app.readonly #import-btn,
+  .app.readonly .row-list .entry-actions {
+    display: none !important;
   }
 
   .tabs {
@@ -667,9 +713,17 @@
         <span id="signed-in-email"></span> ·
         <button type="button" id="signout-btn" class="ghost-btn">Sign out</button>
       </div>
+      <span id="log-switcher" class="log-switcher hidden">
+        <label for="log-switcher-select">Viewing</label>
+        <select id="log-switcher-select">
+          <option value="own">My log</option>
+          <option value="other" id="log-switcher-other">Their log</option>
+        </select>
+      </span>
     </div>
     <p class="empty-note hidden" id="auth-denied-note" style="border: none; padding: 4px 0 0;">This app is private — only D and Annelyn's Google accounts can sign in.</p>
     <p class="empty-note hidden" id="sync-note" style="border: none; padding: 4px 0 0;"></p>
+    <p class="hidden" id="readonly-banner">Read-only</p>
   </header>
 
   <nav class="tabs">
@@ -1117,6 +1171,15 @@
   // propagate instead of being treated as "unsynced local work."
   let pendingLocalReconcile = false;
 
+  // Stage 4 — viewing the other person's log, read-only. viewingUid is null
+  // for own log; otherwise the other person's uid. While viewing theirs, own
+  // state (entries/foods/weigh-ins + targets/goal) is stashed in ownStash and
+  // the own-log subscription is torn down; both are restored on switch-back.
+  let viewingUid = null;
+  let unsubscribeOtherLog = null;
+  let ownStash = null;
+  let switcherUid = null;
+
   let migrated = false;
   entries.forEach(function (entry) {
     if (!entry.id) {
@@ -1209,6 +1272,11 @@
   const importCancelBtn = document.getElementById('import-cancel-btn');
   const themeBtn = document.getElementById('theme-btn');
   const syncNoteEl = document.getElementById('sync-note');
+  const appEl = document.querySelector('.app');
+  const logSwitcherEl = document.getElementById('log-switcher');
+  const logSwitcherSelect = document.getElementById('log-switcher-select');
+  const logSwitcherOtherOption = document.getElementById('log-switcher-other');
+  const readonlyBannerEl = document.getElementById('readonly-banner');
   const todayViewEl = document.getElementById('today-view');
   const historyViewEl = document.getElementById('history-view');
   const foodsViewEl = document.getElementById('foods-view');
@@ -1280,6 +1348,7 @@
 
   form.addEventListener('submit', function (event) {
     event.preventDefault();
+    if (viewingUid) { return; }
 
     const name = nameInput.value.trim();
     const weight = Number(weightInput.value);
@@ -1347,6 +1416,7 @@
   }
 
   function deleteEntry(id) {
+    if (viewingUid) { return; }
     entries = entries.filter(function (e) { return e.id !== id; });
 
     if (editingId === id) {
@@ -1521,6 +1591,7 @@
   });
 
   logMealBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
     const mealName = mealNameInput.value.trim();
 
     if (!mealName || mealIngredients.length === 0) {
@@ -2322,6 +2393,7 @@
   }
 
   function deleteFood(id) {
+    if (viewingUid) { return; }
     foods = foods.filter(function (f) { return f.id !== id; });
     if (editingFoodId === id) {
       editingFoodId = null;
@@ -2356,6 +2428,7 @@
   }
 
   function syncSettings() {
+    if (viewingUid) { return; }
     syncSlice('settings', collectSettings());
   }
 
@@ -2392,6 +2465,7 @@
   }
 
   function saveEntries() {
+    if (viewingUid) { return; } // read-only while viewing the other person's log
     localStorage.setItem('calorie-entries', JSON.stringify(entries));
     syncSlice('entries', entries);
   }
@@ -2402,6 +2476,7 @@
   }
 
   function saveFoods() {
+    if (viewingUid) { return; }
     localStorage.setItem('calorie-foods', JSON.stringify(foods));
     syncSlice('foods', foods);
   }
@@ -2451,6 +2526,7 @@
   }
 
   function saveWeighIns() {
+    if (viewingUid) { return; }
     localStorage.setItem('calorie-weigh-ins', JSON.stringify(weighIns));
     syncSlice('weighIns', weighIns);
   }
@@ -2636,6 +2712,7 @@
   }
 
   function deleteWeighIn(id) {
+    if (viewingUid) { return; }
     weighIns = weighIns.filter(function (w) { return w.id !== id; });
 
     if (editingWeighInId === id) {
@@ -2651,6 +2728,7 @@
 
   weightForm.addEventListener('submit', function (event) {
     event.preventDefault();
+    if (viewingUid) { return; }
 
     const date = weightDateInput.value;
     const weight = Number(weightValueInput.value);
@@ -2682,6 +2760,7 @@
   });
 
   saveGoalWeightBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
     goalWeight = parseOptionalTarget(goalWeightInput.value);
     saveGoalWeight();
     syncSettings();
@@ -2852,6 +2931,7 @@
   }
 
   saveTargetBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
     const caloriesValue = Number(targetCaloriesInput.value);
     if (caloriesValue > 0) {
       dailyTarget = caloriesValue;
@@ -3207,7 +3287,14 @@
   // security boundary: that's the Firestore security rules already
   // published, which enforce the same allowlist server-side regardless of
   // what this page does.
-  const ALLOWED_EMAILS = ['dcachuela13@gmail.com', 'liboonannelyn17.svc@gmail.com'];
+  // The two people who use this app. uid is each one's Firebase Auth UID —
+  // needed so either can read the other's log tree (users/{uid}/data) for the
+  // Stage 4 log switcher. The published read rules already permit it.
+  const USERS = [
+    { email: 'dcachuela13@gmail.com', uid: 'DRGjHuZEPfUhPww3xHfp34jfGDa2', label: 'Davin' },
+    { email: 'liboonannelyn17.svc@gmail.com', uid: 'jCQVynEYVgUFP3nyYItmcY37soY2', label: 'Annelyn' }
+  ];
+  const ALLOWED_EMAILS = USERS.map(function (u) { return u.email; });
   const signinBtn = document.getElementById('signin-btn');
   const signoutBtn = document.getElementById('signout-btn');
   const signedInInfo = document.getElementById('signed-in-info');
@@ -3276,14 +3363,27 @@
       return;
     }
     pendingLocalReconcile = true;
+    subscribeOwnLog();
+  });
+
+  // Subscribes the own-log listener for currentUid. Factored out so the Stage 4
+  // switcher can tear it down while viewing the other person's log and bring it
+  // back on switch-back.
+  function subscribeOwnLog() {
+    if (!currentUid || !window.firebaseDb) {
+      return;
+    }
+    if (unsubscribeFirestore) {
+      unsubscribeFirestore();
+    }
     unsubscribeFirestore = window.firebaseDb.subscribe(
-      user.uid,
+      currentUid,
       onFirestoreSnapshot,
       function () {
         showSyncNote('Sync error — changes are saved on this device only.', true);
       }
     );
-  });
+  }
 
   // Merges in any local items whose id the remote set doesn't have. Used ONCE
   // per sign-in (see pendingLocalReconcile) to catch items logged in the
@@ -3318,6 +3418,12 @@
   }
 
   function onFirestoreSnapshot(data) {
+    // Defensive: the own-log subscription is torn down while viewing the other
+    // person's log, so this shouldn't fire then — but ignore it if it races.
+    if (viewingUid) {
+      return;
+    }
+
     // Our own just-written change echoing straight back — the state is
     // already in memory, so re-applying it would only force a redundant
     // render (and could stomp an in-progress edit).
@@ -3390,6 +3496,193 @@
     showSyncNote(data.fromCache ? 'Showing your synced log (offline copy).' : 'Synced with your account.');
     render();
   }
+
+  // --- Stage 4: view the other person's log, read-only --------------------
+
+  // Everything that differs between the two logs. Stashed on switch-to-other,
+  // put back on switch-back — the render functions all read these module vars
+  // directly, so swapping them is what makes every tab show the other log.
+  function collectOwnState() {
+    return {
+      entries: entries, foods: foods, weighIns: weighIns,
+      dailyTarget: dailyTarget, proteinTarget: proteinTarget,
+      carbsTarget: carbsTarget, fatTarget: fatTarget, goalWeight: goalWeight
+    };
+  }
+
+  function restoreOwnState() {
+    if (!ownStash) {
+      return;
+    }
+    entries = ownStash.entries;
+    foods = ownStash.foods;
+    weighIns = ownStash.weighIns;
+    dailyTarget = ownStash.dailyTarget;
+    proteinTarget = ownStash.proteinTarget;
+    carbsTarget = ownStash.carbsTarget;
+    fatTarget = ownStash.fatTarget;
+    goalWeight = ownStash.goalWeight;
+    ownStash = null;
+  }
+
+  // Clears any in-progress edit / builder so switching logs never leaves a
+  // half-open form pointed at the wrong data.
+  function cancelAllEdits() {
+    editingId = null;
+    editingFoodId = null;
+    editingWeighInId = null;
+    submitBtn.textContent = 'Add';
+    weightSubmitBtn.textContent = 'Log';
+    form.reset();
+    weightForm.reset();
+    weightDateInput.value = getTodayDate();
+    newFoodFieldsEl.classList.add('hidden');
+    targetForm.classList.add('hidden');
+    editTargetBtn.classList.remove('hidden');
+    goalWeightForm.classList.add('hidden');
+    editGoalWeightBtn.classList.remove('hidden');
+    resetMealBuilder();
+    mealBuilderFieldsEl.classList.add('hidden');
+    toggleMealBuilderBtn.classList.remove('hidden');
+    foodSearchQuery = '';
+    if (foodSearchInput) {
+      foodSearchInput.value = '';
+    }
+  }
+
+  // Toggles the read-only chrome. The CSS `.app.readonly` rules hide every
+  // input surface; this also shows the banner and (belt-and-suspenders) the
+  // save functions bail on viewingUid.
+  function applyReadOnlyMode(on, label) {
+    appEl.classList.toggle('readonly', on);
+    readonlyBannerEl.classList.toggle('hidden', !on);
+    if (on) {
+      readonlyBannerEl.textContent = 'Viewing ' + (label || 'the other') + '’s log — read-only';
+    }
+  }
+
+  function viewOtherLog(uid, label) {
+    if (!uid || !window.firebaseDb || !currentUid || viewingUid === uid) {
+      return;
+    }
+    if (!ownStash) {
+      ownStash = collectOwnState();
+    }
+    // Own log stops updating in the background while we're viewing theirs;
+    // switch-back re-subscribes and pulls anything that changed meanwhile.
+    if (unsubscribeFirestore) {
+      unsubscribeFirestore();
+      unsubscribeFirestore = null;
+    }
+    viewingUid = uid;
+    cancelAllEdits();
+    applyReadOnlyMode(true, label);
+    entries = [];
+    foods = [];
+    weighIns = [];
+    render();
+    showSyncNote('Loading ' + label + '’s log…');
+
+    if (unsubscribeOtherLog) {
+      unsubscribeOtherLog();
+    }
+    unsubscribeOtherLog = window.firebaseDb.subscribe(uid, function (data) {
+      if (viewingUid !== uid) {
+        return; // switched away before this snapshot landed
+      }
+      entries = data.entries || [];
+      foods = data.foods || [];
+      weighIns = data.weighIns || [];
+      const s = data.settings || {};
+      dailyTarget = (typeof s.dailyTarget === 'number' && s.dailyTarget > 0) ? s.dailyTarget : DEFAULT_DAILY_TARGET;
+      proteinTarget = typeof s.proteinTarget === 'number' ? s.proteinTarget : null;
+      carbsTarget = typeof s.carbsTarget === 'number' ? s.carbsTarget : null;
+      fatTarget = typeof s.fatTarget === 'number' ? s.fatTarget : null;
+      goalWeight = typeof s.goalWeight === 'number' ? s.goalWeight : null;
+      render();
+      // The gold banner already says we're viewing their log read-only, so on a
+      // normal load just clear the transient note; only speak up if it's empty.
+      if (entries.length) {
+        hideSyncNote();
+      } else {
+        showSyncNote(label + ' hasn’t logged anything yet.');
+      }
+    }, function () {
+      if (viewingUid !== uid) {
+        return;
+      }
+      showSyncNote('Couldn’t load ' + label + '’s log.', true);
+      logSwitcherSelect.value = 'own';
+      viewOwnLog();
+    });
+  }
+
+  function viewOwnLog() {
+    if (unsubscribeOtherLog) {
+      unsubscribeOtherLog();
+      unsubscribeOtherLog = null;
+    }
+    viewingUid = null;
+    restoreOwnState();
+    cancelAllEdits();
+    applyReadOnlyMode(false);
+    logSwitcherSelect.value = 'own';
+    if (currentUid && window.firebaseDb) {
+      // Own data is real and known — adopt the next snapshot as-is, no reconcile.
+      pendingLocalReconcile = false;
+      firestoreReady = true;
+      subscribeOwnLog();
+    }
+    render();
+  }
+
+  logSwitcherSelect.addEventListener('change', function () {
+    if (logSwitcherSelect.value === 'other') {
+      viewOtherLog(logSwitcherOtherOption.dataset.uid, logSwitcherOtherOption.dataset.label);
+    } else {
+      viewOwnLog();
+    }
+  });
+
+  // Switcher setup/teardown, driven by the same auth-changed event. Runs after
+  // the Firestore lifecycle listener above (source order), so currentUid is set.
+  window.addEventListener('auth-changed', function (event) {
+    const user = event.detail;
+    const signedIn = !!user && ALLOWED_EMAILS.includes(user.email);
+    if (signedIn && switcherUid === user.uid) {
+      return;
+    }
+    switcherUid = signedIn ? user.uid : null;
+
+    // Any auth change ends an "other log" view and restores own data.
+    if (unsubscribeOtherLog) {
+      unsubscribeOtherLog();
+      unsubscribeOtherLog = null;
+    }
+    if (viewingUid) {
+      viewingUid = null;
+      restoreOwnState();
+      applyReadOnlyMode(false);
+    }
+    logSwitcherSelect.value = 'own';
+
+    if (signedIn) {
+      const me = USERS.find(function (u) { return u.uid === user.uid; })
+        || USERS.find(function (u) { return u.email === user.email; });
+      const other = me ? USERS.find(function (u) { return u !== me; }) : null;
+      if (other) {
+        logSwitcherOtherOption.textContent = other.label + '’s log';
+        logSwitcherOtherOption.dataset.uid = other.uid;
+        logSwitcherOtherOption.dataset.label = other.label;
+        logSwitcherEl.classList.remove('hidden');
+      } else {
+        logSwitcherEl.classList.add('hidden');
+      }
+    } else {
+      logSwitcherEl.classList.add('hidden');
+    }
+    render();
+  });
 
   function formatTimeLabel(hhmm) {
     const parts = hhmm.split(':');
