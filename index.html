@@ -108,6 +108,14 @@
     color: var(--ink-soft);
   }
 
+  .auth-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
   .tabs {
     display: flex;
     gap: 4px;
@@ -653,6 +661,14 @@
   <header>
     <h1>Calorie Deficit Log</h1>
     <p class="tagline">Started by Annelyn. Kept up by Davin.</p>
+    <div id="auth-bar" class="auth-bar">
+      <button type="button" id="signin-btn" class="ghost-btn">Sign in with Google</button>
+      <div id="signed-in-info" class="hidden">
+        <span id="signed-in-email"></span> ·
+        <button type="button" id="signout-btn" class="ghost-btn">Sign out</button>
+      </div>
+    </div>
+    <p class="empty-note hidden" id="auth-denied-note" style="border: none; padding: 4px 0 0;">This app is private — only D and Annelyn's Google accounts can sign in.</p>
   </header>
 
   <nav class="tabs">
@@ -899,6 +915,46 @@
     </div>
   </footer>
 </div>
+
+<!--
+  Firebase Auth setup lives in its own type="module" script because the
+  Firebase SDK is ES-module-only (import statements), while the rest of this
+  app is one plain classic script. It talks to the classic script below via
+  window.firebaseAuth (call in) and a window 'auth-changed' CustomEvent
+  (call out), rather than converting 3000+ lines to modules for this.
+-->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+  import {
+    getAuth,
+    GoogleAuthProvider,
+    signInWithPopup,
+    signOut,
+    onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyC8NtYpWSWpXx0nCIWIWg0QNFyDAok8edk",
+    authDomain: "calorie-deficit-log.firebaseapp.com",
+    projectId: "calorie-deficit-log",
+    storageBucket: "calorie-deficit-log.firebasestorage.app",
+    messagingSenderId: "1084873432300",
+    appId: "1:1084873432300:web:0c1c4a7b7922f47ef299c9"
+  };
+
+  const firebaseApp = initializeApp(firebaseConfig);
+  const auth = getAuth(firebaseApp);
+  const googleProvider = new GoogleAuthProvider();
+
+  window.firebaseAuth = {
+    signIn: () => signInWithPopup(auth, googleProvider),
+    signOut: () => signOut(auth)
+  };
+
+  onAuthStateChanged(auth, function (user) {
+    window.dispatchEvent(new CustomEvent('auth-changed', { detail: user }));
+  });
+</script>
 
 <script>
   const DEFAULT_DAILY_TARGET = 1850;
@@ -2963,6 +3019,50 @@
   window.addEventListener('appinstalled', function () {
     installBtn.classList.add('hidden');
     deferredInstallPrompt = null;
+  });
+
+  // Google sign-in via Firebase Auth (see the type="module" script above).
+  // This is a two-person app, so ALLOWED_EMAILS is a plain client-side
+  // convenience check — a clear "this app is private" message instead of
+  // silent confusion if a stranger tries to sign in. It is NOT the real
+  // security boundary: that's the Firestore security rules already
+  // published, which enforce the same allowlist server-side regardless of
+  // what this page does.
+  const ALLOWED_EMAILS = ['dcachuela13@gmail.com', 'liboonannelyn17.svc@gmail.com'];
+  const signinBtn = document.getElementById('signin-btn');
+  const signoutBtn = document.getElementById('signout-btn');
+  const signedInInfo = document.getElementById('signed-in-info');
+  const signedInEmail = document.getElementById('signed-in-email');
+  const authDeniedNote = document.getElementById('auth-denied-note');
+
+  signinBtn.addEventListener('click', function () {
+    authDeniedNote.classList.add('hidden');
+    window.firebaseAuth.signIn().catch(function (err) {
+      console.error('Sign-in failed', err);
+    });
+  });
+
+  signoutBtn.addEventListener('click', function () {
+    window.firebaseAuth.signOut();
+  });
+
+  window.addEventListener('auth-changed', function (event) {
+    const user = event.detail;
+
+    if (user && !ALLOWED_EMAILS.includes(user.email)) {
+      window.firebaseAuth.signOut();
+      authDeniedNote.classList.remove('hidden');
+      return;
+    }
+
+    if (user) {
+      signinBtn.classList.add('hidden');
+      signedInInfo.classList.remove('hidden');
+      signedInEmail.textContent = user.email;
+    } else {
+      signinBtn.classList.remove('hidden');
+      signedInInfo.classList.add('hidden');
+    }
   });
 
   function formatTimeLabel(hhmm) {
