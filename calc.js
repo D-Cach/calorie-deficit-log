@@ -91,3 +91,81 @@ function calculateRollingWeightAverage(sortedOldestFirst) {
     return sum / windowEntries.length;
   });
 }
+
+// Looks up a saved food by name, case- and whitespace-insensitive — the
+// "have we already learned this food's nutrition?" check.
+function findFood(foods, name) {
+  const key = name.trim().toLowerCase();
+  return foods.find(function (f) { return f.name.trim().toLowerCase() === key; }) || null;
+}
+
+// Consecutive days, counting back from todayStr, that were both logged and at
+// or under the calorie target. `totals` is a { 'YYYY-MM-DD': calories } map.
+// An empty today doesn't break the streak — it's still in progress, so the
+// count starts from yesterday in that case. A while loop (not map/reduce)
+// because it has to stop at the first day that ends the streak.
+function calculateStreak(totals, dailyTarget, todayStr) {
+  const cursor = new Date(todayStr + 'T00:00:00');
+  if (!totals[formatDate(cursor)]) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  let streak = 0;
+  while (true) {
+    const total = totals[formatDate(cursor)];
+    if (total === undefined || total > dailyTarget) { break; }
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+// Aggregates one window of dates: average calories over the days that were
+// actually logged (gaps don't count as zero-calorie days), how many days that
+// was, the mean of any weigh-ins whose date falls inside the window, and the
+// average's distance from the target. `totals` is a { date: calories } map.
+function weekStats(dates, totals, weighIns, dailyTarget) {
+  const loggedDays = dates.filter(function (d) { return totals[d] > 0; });
+  const avgCal = loggedDays.length
+    ? Math.round(loggedDays.reduce(function (s, d) { return s + totals[d]; }, 0) / loggedDays.length)
+    : null;
+  const from = dates[0];
+  const to = dates[dates.length - 1];
+  const winWeighIns = weighIns.filter(function (w) { return w.date >= from && w.date <= to; });
+  const avgWeight = winWeighIns.length
+    ? winWeighIns.reduce(function (s, w) { return s + w.weight; }, 0) / winWeighIns.length
+    : null;
+  return {
+    avgCal: avgCal,
+    loggedCount: loggedDays.length,
+    avgWeight: avgWeight,
+    vsTarget: avgCal === null ? null : avgCal - dailyTarget
+  };
+}
+
+// Brings older saved entries up to the current shape: give every entry an id
+// and a date, and 0-fill weight/macros on pre-weight-era entries. Returns a
+// NEW array of NEW objects (the input is left untouched) plus a `changed` flag
+// so the caller only re-saves when something actually moved.
+//
+// The `!entry.isMeal` guard is load-bearing: a meal entry legitimately has no
+// top-level weight (its components carry their own), so without it every meal
+// would look like a pre-weight legacy entry and have its real macros
+// overwritten with zeros on every page load.
+function migrateEntries(entries, todayStr) {
+  let changed = false;
+  const migrated = entries.map(function (raw) {
+    const entry = Object.assign({}, raw);
+    if (!entry.id) { entry.id = crypto.randomUUID(); changed = true; }
+    if (!entry.date) { entry.date = todayStr; changed = true; }
+    if (!entry.isMeal && entry.weight === undefined) {
+      entry.weight = 0;
+      entry.unit = 'g';
+      entry.protein = 0;
+      entry.carbs = 0;
+      entry.fat = 0;
+      changed = true;
+    }
+    return entry;
+  });
+  return { entries: migrated, changed: changed };
+}

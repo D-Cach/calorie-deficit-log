@@ -101,4 +101,73 @@
   close('rolling avg: Aug 1 has nothing else in its window', withACluster[0], 96, 1e-9);
   close('rolling avg: Aug 8 window excludes Aug 1 (7 days back)', withACluster[1], 94, 1e-9);
   close('rolling avg: Aug 9 window includes Aug 8 and Aug 9', withACluster[2], 93, 1e-9);
+
+  // ---------- findFood ----------
+  const library = [
+    { name: 'Chicken breast', caloriesPer100g: 165 },
+    { name: 'White rice', caloriesPer100g: 130 }
+  ];
+  ok('findFood matches ignoring case and surrounding space',
+    findFood(library, '  chicken BREAST ') === library[0], 'did not match');
+  eq('findFood returns null when nothing matches', findFood(library, 'tofu'), null);
+  eq('findFood on an empty library is null', findFood([], 'anything'), null);
+
+  // ---------- calculateStreak ----------
+  const t = {
+    '2026-08-28': 1700, // today, under target
+    '2026-08-27': 1800,
+    '2026-08-26': 1750,
+    '2026-08-25': 2200, // over target — ends the streak here
+    '2026-08-24': 1600
+  };
+  eq('calculateStreak counts consecutive under-target days', calculateStreak(t, 2000, '2026-08-28'), 3);
+  eq('calculateStreak stops at an over-target day',
+    calculateStreak({ '2026-08-28': 2500, '2026-08-27': 1500 }, 2000, '2026-08-28'), 0);
+  eq('calculateStreak: an empty today does not break the run — count from yesterday',
+    calculateStreak({ '2026-08-27': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28'), 2);
+  eq('calculateStreak stops at the first unlogged gap',
+    calculateStreak({ '2026-08-28': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28'), 1);
+  eq('calculateStreak: a day exactly on target still counts',
+    calculateStreak({ '2026-08-28': 2000, '2026-08-27': 2000 }, 2000, '2026-08-28'), 2);
+
+  // ---------- weekStats ----------
+  const week = ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07'];
+  const wsTotals = { '2026-08-01': 1800, '2026-08-03': 2000, '2026-08-05': 2200 }; // 3 of 7 logged
+  const wsWeighIns = [
+    { date: '2026-08-02', weight: 90 },
+    { date: '2026-08-06', weight: 89 },
+    { date: '2026-07-31', weight: 99 } // outside the window — must be ignored
+  ];
+  const ws = weekStats(week, wsTotals, wsWeighIns, 2000);
+  eq('weekStats averages only the logged days', ws.avgCal, 2000);        // (1800+2000+2200)/3
+  eq('weekStats counts the logged days', ws.loggedCount, 3);
+  close('weekStats averages only in-window weigh-ins', ws.avgWeight, 89.5, 1e-9);
+  eq('weekStats vsTarget is avg minus target', ws.vsTarget, 0);
+  const wsEmpty = weekStats(week, {}, [], 2000);
+  eq('weekStats avgCal is null with nothing logged', wsEmpty.avgCal, null);
+  eq('weekStats avgWeight is null with no weigh-ins', wsEmpty.avgWeight, null);
+  eq('weekStats vsTarget is null when avgCal is null', wsEmpty.vsTarget, null);
+
+  // ---------- migrateEntries ----------
+  // Regression for the v1.20 bug: a meal has no top-level weight, so without
+  // the isMeal guard migration would zero out its real macros on every load.
+  const meal = { id: 'm1', date: '2026-08-10', isMeal: true, calories: 600, protein: 40, carbs: 50, fat: 20,
+    components: [{ name: 'Rice', weight: 200 }] };
+  const legacy = { calories: 250 }; // pre-weight era: no id, no date, no weight
+  const out = migrateEntries([meal, legacy], '2026-08-28');
+  ok('migrateEntries leaves a complete meal entry untouched',
+    out.entries[0].weight === undefined && out.entries[0].protein === 40 && out.entries[0].carbs === 50,
+    JSON.stringify(out.entries[0]));
+  eq('migrateEntries 0-fills a genuine legacy entry (weight)', out.entries[1].weight, 0);
+  eq('migrateEntries 0-fills a genuine legacy entry (protein)', out.entries[1].protein, 0);
+  eq('migrateEntries fills a missing date with today', out.entries[1].date, '2026-08-28');
+  ok('migrateEntries gives a missing id a string', typeof out.entries[1].id === 'string' && out.entries[1].id.length > 0,
+    'id was ' + JSON.stringify(out.entries[1].id));
+  eq('migrateEntries reports it changed something', out.changed, true);
+  ok('migrateEntries does not mutate its input',
+    meal.date === '2026-08-10' && legacy.weight === undefined && legacy.id === undefined,
+    'input was mutated');
+  const clean = [{ id: 'a', date: '2026-08-01', weight: 100, unit: 'g', calories: 100, protein: 1, carbs: 1, fat: 1 }];
+  eq('migrateEntries reports no change when nothing needs migrating',
+    migrateEntries(clean, '2026-08-28').changed, false);
 })();

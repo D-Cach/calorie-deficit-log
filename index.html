@@ -1286,30 +1286,12 @@
   let ownStash = null;
   let switcherUid = null;
 
-  let migrated = false;
-  entries.forEach(function (entry) {
-    if (!entry.id) {
-      entry.id = crypto.randomUUID();
-      migrated = true;
-    }
-    if (!entry.date) {
-      entry.date = TODAY;
-      migrated = true;
-    }
-    // Meals never have a top-level weight/unit (their components do instead),
-    // so without this guard every meal would look like a pre-migration entry
-    // and get its real macros overwritten with zeros on every page load.
-    if (!entry.isMeal && entry.weight === undefined) {
-      // Entries logged before weight/macros existed — best guess is 0, not a crash.
-      entry.weight = 0;
-      entry.unit = 'g';
-      entry.protein = 0;
-      entry.carbs = 0;
-      entry.fat = 0;
-      migrated = true;
-    }
-  });
-  if (migrated) {
+  // Bring older saved entries up to the current shape (ids, dates, 0-filled
+  // weight/macros on pre-weight entries — meals excluded). Pure helper in
+  // calc.js; re-save only if it actually changed something.
+  const entryMigration = migrateEntries(entries, TODAY);
+  entries = entryMigration.entries;
+  if (entryMigration.changed) {
     saveEntries();
   }
 
@@ -1419,18 +1401,11 @@
   const tdeeApplyRowEl = document.getElementById('tdee-apply-row');
   const tdeeApplyBtn = document.getElementById('tdee-apply-btn');
 
-  // Looks up a saved food by name (case/whitespace-insensitive) — this is the
-  // "did we already learn this food's nutrition?" check.
-  function findFood(name) {
-    const key = name.trim().toLowerCase();
-    return foods.find(function (f) { return f.name.trim().toLowerCase() === key; }) || null;
-  }
-
   // Shows the "teach me this food" fields only when the typed name isn't
   // already in the food library — a known food needs nothing but a weight.
   function updateFoodFieldsVisibility() {
     const name = nameInput.value.trim();
-    const isNewFood = !!name && !findFood(name);
+    const isNewFood = !!name && !findFood(foods, name);
     newFoodFieldsEl.classList.toggle('hidden', !isNewFood);
     newPerInput.required = isNewFood;
     newCaloriesInput.required = isNewFood;
@@ -1446,7 +1421,7 @@
     const weight = Number(weightInput.value);
     const unit = unitSelect.value;
 
-    let food = findFood(name);
+    let food = findFood(foods, name);
     if (!food) {
       food = {
         id: crypto.randomUUID(),
@@ -1533,7 +1508,7 @@
   // a regular logged food, per-amount basis and all.
   function updateMealFoodFieldsVisibility() {
     const name = mealFoodNameInput.value.trim();
-    const isNewFood = !!name && !findFood(name);
+    const isNewFood = !!name && !findFood(foods, name);
     mealNewFoodFieldsEl.classList.toggle('hidden', !isNewFood);
   }
 
@@ -1599,7 +1574,7 @@
       return;
     }
 
-    let food = findFood(name);
+    let food = findFood(foods, name);
     if (!food) {
       food = {
         id: crypto.randomUUID(),
@@ -1814,36 +1789,8 @@
     });
   }
 
-  // Walks backward one day at a time from today, counting while each day was
-  // both logged and under target, and stopping at the first day that breaks
-  // either condition. Unlike the forEach/reduce/map used everywhere else in
-  // this app, this loop has to stop early — it doesn't know how far back the
-  // streak goes until it actually hits the day that ends it.
-  function calculateStreak() {
-    const totals = totalsByDate();
-    const cursor = new Date();
-
-    // An empty "today" is still in progress, not a broken streak — check
-    // yesterday first in that case instead of zeroing out immediately.
-    if (!totals[formatDate(cursor)]) {
-      cursor.setDate(cursor.getDate() - 1);
-    }
-
-    let streak = 0;
-    while (true) {
-      const total = totals[formatDate(cursor)];
-      if (total === undefined || total > dailyTarget) {
-        break;
-      }
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-
-    return streak;
-  }
-
   function renderStreak() {
-    const streak = calculateStreak();
+    const streak = calculateStreak(totalsByDate(), dailyTarget, TODAY);
     streakLineEl.innerHTML = '';
 
     if (streak === 0) {
@@ -2247,28 +2194,6 @@
     renderStatList(yearlyListEl, groupAverages(yearKey), function (key) { return key; }, 'No years logged yet.');
   }
 
-  // Aggregates one 7-day window: average of the days that were actually logged
-  // (gaps don't count as zero-calorie days), how many days that was, and the
-  // mean of any weigh-ins that fall in the window.
-  function weekStats(dates, totals) {
-    const loggedDays = dates.filter(function (d) { return totals[d] > 0; });
-    const avgCal = loggedDays.length
-      ? Math.round(loggedDays.reduce(function (s, d) { return s + totals[d]; }, 0) / loggedDays.length)
-      : null;
-    const from = dates[0];
-    const to = dates[dates.length - 1];
-    const winWeighIns = weighIns.filter(function (w) { return w.date >= from && w.date <= to; });
-    const avgWeight = winWeighIns.length
-      ? winWeighIns.reduce(function (s, w) { return s + w.weight; }, 0) / winWeighIns.length
-      : null;
-    return {
-      avgCal: avgCal,
-      loggedCount: loggedDays.length,
-      avgWeight: avgWeight,
-      vsTarget: avgCal === null ? null : avgCal - dailyTarget
-    };
-  }
-
   // "This week" and "last week" are the two most recent COMPLETE 7-day
   // windows — today is excluded so a half-logged current day can't skew the
   // comparison.
@@ -2288,8 +2213,8 @@
     weekCompareNoteEl.textContent = 'Change = this week − last week · target ' +
       dailyTarget.toLocaleString() + ' kcal/day.';
 
-    const L = weekStats(lastWeek, totals);
-    const T = weekStats(thisWeek, totals);
+    const L = weekStats(lastWeek, totals, weighIns, dailyTarget);
+    const T = weekStats(thisWeek, totals, weighIns, dailyTarget);
 
     // this week − last week, as a plain signed magnitude with a direction
     // arrow — no "good/bad" colouring, since lower isn't universally better.
@@ -3473,7 +3398,7 @@
     const protein = todaysEntries.reduce(function (sum, e) { return sum + e.protein; }, 0);
     const carbs = todaysEntries.reduce(function (sum, e) { return sum + e.carbs; }, 0);
     const fat = todaysEntries.reduce(function (sum, e) { return sum + e.fat; }, 0);
-    const streak = calculateStreak();
+    const streak = calculateStreak(totalsByDate(), dailyTarget, TODAY);
     const dateLabel = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
     const lines = [];
