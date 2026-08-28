@@ -156,10 +156,33 @@
   .app.readonly #weight-form,
   .app.readonly #edit-goal-weight-btn,
   .app.readonly #goal-weight-form,
+  .app.readonly #tdee-apply-row,
   .app.readonly #export-btn,
   .app.readonly #import-btn,
   .app.readonly .row-list .entry-actions {
     display: none !important;
+  }
+
+  #tdee-detail,
+  .tdee-suggestion {
+    margin: 8px 0 0;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+
+  .tdee-suggestion strong {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #tdee-controls {
+    margin-top: 12px;
+    max-width: 200px;
+  }
+
+  #tdee-apply-row {
+    margin-top: 10px;
   }
 
   .tabs {
@@ -902,6 +925,23 @@
       <canvas id="weight-trend-chart" width="500" height="170"></canvas>
     </div>
 
+    <div class="trend-block" id="tdee-block">
+      <div class="trend-header">
+        <span class="trend-label">Maintenance Estimate</span>
+        <span class="trend-avg" id="tdee-headline"></span>
+      </div>
+      <p id="tdee-detail"></p>
+      <div class="new-food-row" id="tdee-controls">
+        <label>Lose per week (kg)
+          <input type="number" id="tdee-rate-input" step="0.05" min="0" value="0.5">
+        </label>
+      </div>
+      <p class="tdee-suggestion" id="tdee-suggestion"></p>
+      <div class="entry-actions" id="tdee-apply-row">
+        <button type="button" id="tdee-apply-btn">Use as my daily target</button>
+      </div>
+    </div>
+
     <div class="target-settings">
       <button type="button" id="edit-goal-weight-btn" class="ghost-btn">Change goal weight</button>
       <div id="goal-weight-form" class="new-food-fields hidden">
@@ -1107,6 +1147,13 @@
   // grams of each macro into its real share of the day's calories.
   const MACRO_KCAL_PER_G = { protein: 4, carbs: 4, fat: 9 };
 
+  // Adaptive target (Weight tab). ~7700 kcal per kg of body mass is the
+  // standard energy-balance approximation used to turn a weight trend into a
+  // calorie surplus/deficit. It's rough at the edges (early loss is partly
+  // glycogen + water, which "cost" far less) but fine for a personal trend.
+  const KCAL_PER_KG = 7700;
+  const TDEE_WINDOW_DAYS = 28;
+
   let entries = loadEntries();
   let foods = loadFoods();
   let editingId = null;
@@ -1274,6 +1321,13 @@
   const saveGoalWeightBtn = document.getElementById('save-goal-weight-btn');
   const weightMonthlyListEl = document.getElementById('weight-monthly-list');
   const weightYearlyListEl = document.getElementById('weight-yearly-list');
+  const tdeeHeadlineEl = document.getElementById('tdee-headline');
+  const tdeeDetailEl = document.getElementById('tdee-detail');
+  const tdeeControlsEl = document.getElementById('tdee-controls');
+  const tdeeRateInput = document.getElementById('tdee-rate-input');
+  const tdeeSuggestionEl = document.getElementById('tdee-suggestion');
+  const tdeeApplyRowEl = document.getElementById('tdee-apply-row');
+  const tdeeApplyBtn = document.getElementById('tdee-apply-btn');
 
   // Looks up a saved food by name (case/whitespace-insensitive) — this is the
   // "did we already learn this food's nutrition?" check.
@@ -1300,6 +1354,16 @@
 
   function round1(value) {
     return Math.round(value * 10) / 10;
+  }
+
+  function round2(value) {
+    return Math.round(value * 100) / 100;
+  }
+
+  // Whole days from date string a to date string b (both 'YYYY-MM-DD').
+  function daysBetweenDates(a, b) {
+    const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime();
+    return Math.round(ms / 86400000);
   }
 
   // Shows the "teach me this food" fields only when the typed name isn't
@@ -2522,9 +2586,156 @@
     renderWeighInsList();
     renderWeightLatestLine();
     drawWeightTrendChart();
+    renderAdaptiveTarget();
     renderWeightMonthly();
     renderWeightYearly();
   }
+
+  // Least-squares straight-line fit through {x, y} points. Returns the slope
+  // (y units per x unit), the intercept, and R² (0–1, how much of the spread
+  // in y the line actually explains — a low value means the points are mostly
+  // noise around the line, so the slope shouldn't be trusted). Used to read a
+  // real weight trend out of noisy day-to-day weigh-ins.
+  function linearFit(points) {
+    const n = points.length;
+    if (n < 2) { return null; }
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    points.forEach(function (p) {
+      sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y;
+    });
+    const denom = n * sxx - sx * sx;
+    if (denom === 0) { return null; } // every point on the same day
+    const slope = (n * sxy - sx * sy) / denom;
+    const intercept = (sy - slope * sx) / n;
+    const meanY = sy / n;
+    let ssTot = 0, ssRes = 0;
+    points.forEach(function (p) {
+      const pred = slope * p.x + intercept;
+      ssTot += (p.y - meanY) * (p.y - meanY);
+      ssRes += (p.y - pred) * (p.y - pred);
+    });
+    const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+    return { slope: slope, intercept: intercept, r2: r2 };
+  }
+
+  // Estimates maintenance calories (TDEE) from the last TDEE_WINDOW_DAYS:
+  // average logged intake, minus the calorie value of the weight trend over
+  // the same period (a fitted slope, not first-vs-last, since daily weight is
+  // mostly water noise). Then suggests a daily target for a chosen weekly loss
+  // rate. Refuses to show a number unless there's enough data to mean anything.
+  function renderAdaptiveTarget() {
+    const windowDates = lastNDates(TDEE_WINDOW_DAYS); // oldest first, today last
+    const windowStart = windowDates[0];
+    const inWindow = function (d) { return d >= windowStart && d <= TODAY; };
+
+    // How many days of history we actually have — so someone who's logged
+    // every day for two weeks isn't penalised for not having a full 28.
+    const allDates = entries.map(function (e) { return e.date; })
+      .concat(weighIns.map(function (w) { return w.date; }));
+    const firstDataDate = allDates.length ? allDates.slice().sort()[0] : TODAY;
+    const effectiveWindow = Math.min(TDEE_WINDOW_DAYS, daysBetweenDates(firstDataDate, TODAY) + 1);
+
+    // Weigh-ins in the window, oldest first.
+    const wins = weighIns.filter(function (w) { return inWindow(w.date); })
+      .slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
+
+    // Logged intake in the window — only days with something logged, so gaps
+    // don't drag the average down toward zero.
+    const totals = totalsByDate();
+    const loggedDays = windowDates.filter(function (d) { return totals[d] > 0; });
+    const loggedCount = loggedDays.length;
+    const avgIntake = loggedCount
+      ? loggedDays.reduce(function (s, d) { return s + totals[d]; }, 0) / loggedCount
+      : 0;
+
+    // --- data sufficiency ---
+    const winSpan = wins.length ? daysBetweenDates(wins[0].date, wins[wins.length - 1].date) : 0;
+    const needLogged = Math.max(1, Math.ceil(effectiveWindow * 0.6));
+    const reasons = [];
+    if (wins.length < 6) {
+      const short = 6 - wins.length;
+      reasons.push(short + ' more weigh-in' + (short === 1 ? '' : 's'));
+    }
+    if (wins.length >= 2 && winSpan < 10) {
+      reasons.push('weigh-ins spread across more days (only ' + winSpan + ' so far, need ~10)');
+    }
+    if (loggedCount < needLogged) {
+      reasons.push((needLogged - loggedCount) + ' more logged day' + (needLogged - loggedCount === 1 ? '' : 's') +
+        ' (' + loggedCount + ' of the last ' + effectiveWindow + ')');
+    }
+
+    if (reasons.length) {
+      tdeeHeadlineEl.textContent = 'not enough data yet';
+      tdeeDetailEl.textContent = 'Needs: ' + reasons.join('; ') +
+        '. The estimate only means something with a real weight trend and mostly-complete logging.';
+      tdeeControlsEl.classList.add('hidden');
+      tdeeSuggestionEl.classList.add('hidden');
+      tdeeApplyRowEl.classList.add('hidden');
+      return;
+    }
+
+    // --- fit the weight trend ---
+    const day0 = new Date(wins[0].date + 'T00:00:00').getTime();
+    const points = wins.map(function (w) {
+      return {
+        x: (new Date(w.date + 'T00:00:00').getTime() - day0) / 86400000,
+        y: w.weight
+      };
+    });
+    const fit = linearFit(points);
+    const slopePerDay = fit ? fit.slope : 0; // kg/day, negative = losing
+    const kgPerWeek = slopePerDay * 7;
+
+    // --- energy balance ---
+    const maintenance = avgIntake - slopePerDay * KCAL_PER_KG; // slope<0 adds
+    const maintRounded = Math.round(maintenance / 10) * 10;
+    const currentGap = maintenance - avgIntake; // >0 = eating under maintenance
+
+    tdeeControlsEl.classList.remove('hidden');
+    tdeeSuggestionEl.classList.remove('hidden');
+    tdeeApplyRowEl.classList.remove('hidden');
+
+    tdeeHeadlineEl.innerHTML = '<span class="num">' + maintRounded + '</span> kcal/day';
+
+    const dir = kgPerWeek < -0.02 ? 'losing' : (kgPerWeek > 0.02 ? 'gaining' : 'holding steady');
+    let detail = 'Last ' + effectiveWindow + ' days: ' + loggedCount + ' logged, averaging ' +
+      Math.round(avgIntake) + ' kcal; weight ' + dir +
+      (dir === 'holding steady' ? '' : ' about ' + round1(Math.abs(kgPerWeek)) + ' kg/week') +
+      ' (trend fit R² ' + round2(fit.r2) + '). ';
+    if (fit.r2 < 0.25) {
+      detail += 'That trend is weak — the number below is rough. ';
+    }
+    detail += 'Maintenance lands near ' + maintRounded + ' kcal — you’re currently ' +
+      (currentGap >= 0 ? Math.round(currentGap) + ' under it.' : Math.round(-currentGap) + ' over it.');
+    if (maintenance < 1000 || maintenance > 5000) {
+      detail += ' (That figure looks implausible — some days are probably under-logged, so don’t rely on it yet.)';
+    }
+    tdeeDetailEl.textContent = detail;
+
+    const rate = Number(tdeeRateInput.value);
+    if (!(rate > 0)) {
+      tdeeSuggestionEl.textContent = 'Enter a weekly loss rate above 0 to get a suggested target.';
+      tdeeApplyRowEl.classList.add('hidden');
+      return;
+    }
+    const suggested = Math.round((maintenance - rate * KCAL_PER_KG / 7) / 10) * 10;
+    tdeeSuggestionEl.innerHTML = 'To lose ' + rate + ' kg/week, aim for about <strong>' +
+      suggested + ' kcal/day</strong>.';
+    tdeeApplyBtn.textContent = 'Use ' + suggested + ' as my daily target';
+    tdeeApplyBtn.dataset.target = suggested;
+  }
+
+  tdeeRateInput.addEventListener('input', renderAdaptiveTarget);
+
+  tdeeApplyBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
+    const t = Number(tdeeApplyBtn.dataset.target);
+    if (!(t > 0)) { return; }
+    dailyTarget = t;
+    saveDailyTarget();
+    syncSettings();
+    render();
+  });
 
   // Groups weigh-ins by month/year, averaging the logged values directly —
   // unlike groupAverages() for calories, there's no "over target" concept for
