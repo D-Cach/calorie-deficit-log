@@ -737,6 +737,47 @@
     border-top: 2px dashed var(--ink-soft);
   }
 
+  .week-compare {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+
+  .week-compare th,
+  .week-compare td {
+    padding: 8px 6px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .week-compare th {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-soft);
+  }
+
+  .week-compare th:first-child,
+  .week-compare td:first-child {
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .week-compare td.change {
+    color: var(--ink-soft);
+  }
+
+  .week-compare tr:last-child th,
+  .week-compare tr:last-child td {
+    border-bottom: none;
+  }
+
+  .week-compare-note {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
   .app-footer {
     margin-top: 28px;
     padding-top: 16px;
@@ -921,6 +962,12 @@
         <span class="trend-avg">avg <span id="weekly-avg" class="num">0</span> kcal</span>
       </div>
       <canvas id="trend-chart" width="500" height="170"></canvas>
+    </div>
+
+    <div class="trend-block" id="week-compare-block">
+      <p class="trend-label">This Week vs Last Week</p>
+      <table class="week-compare" id="week-compare-table"></table>
+      <p class="week-compare-note" id="week-compare-note"></p>
     </div>
 
     <div class="trend-block">
@@ -1319,6 +1366,8 @@
   const monthlyListEl = document.getElementById('monthly-list');
   const yearlyListEl = document.getElementById('yearly-list');
   const weeklyAvgEl = document.getElementById('weekly-avg');
+  const weekCompareTableEl = document.getElementById('week-compare-table');
+  const weekCompareNoteEl = document.getElementById('week-compare-note');
   const trendCanvas = document.getElementById('trend-chart');
   const trendCtx = trendCanvas.getContext('2d');
   const foodsListEl = document.getElementById('foods-list');
@@ -1717,6 +1766,7 @@
     renderRecentFoods();
     renderHistory();
     renderTrend();
+    renderWeekComparison();
     renderMonthly();
     renderYearly();
     renderFoods();
@@ -2227,6 +2277,86 @@
 
   function renderYearly() {
     renderStatList(yearlyListEl, groupAverages(yearKey), function (key) { return key; }, 'No years logged yet.');
+  }
+
+  // Aggregates one 7-day window: average of the days that were actually logged
+  // (gaps don't count as zero-calorie days), how many days that was, and the
+  // mean of any weigh-ins that fall in the window.
+  function weekStats(dates, totals) {
+    const loggedDays = dates.filter(function (d) { return totals[d] > 0; });
+    const avgCal = loggedDays.length
+      ? Math.round(loggedDays.reduce(function (s, d) { return s + totals[d]; }, 0) / loggedDays.length)
+      : null;
+    const from = dates[0];
+    const to = dates[dates.length - 1];
+    const winWeighIns = weighIns.filter(function (w) { return w.date >= from && w.date <= to; });
+    const avgWeight = winWeighIns.length
+      ? winWeighIns.reduce(function (s, w) { return s + w.weight; }, 0) / winWeighIns.length
+      : null;
+    return {
+      avgCal: avgCal,
+      loggedCount: loggedDays.length,
+      avgWeight: avgWeight,
+      vsTarget: avgCal === null ? null : avgCal - dailyTarget
+    };
+  }
+
+  // "This week" and "last week" are the two most recent COMPLETE 7-day
+  // windows — today is excluded so a half-logged current day can't skew the
+  // comparison.
+  function renderWeekComparison() {
+    const span = lastNDates(15);       // [today-14 .. today], oldest first
+    const lastWeek = span.slice(0, 7); // today-14 .. today-8
+    const thisWeek = span.slice(7, 14); // today-7 .. today-1
+    const totals = totalsByDate();
+
+    const anyLogged = span.slice(0, 14).some(function (d) { return totals[d] > 0; });
+    const anyWeight = weighIns.some(function (w) { return w.date >= lastWeek[0] && w.date <= thisWeek[6]; });
+    if (!anyLogged && !anyWeight) {
+      weekCompareTableEl.innerHTML = '';
+      weekCompareNoteEl.textContent = 'Not enough history yet for a week-over-week comparison.';
+      return;
+    }
+    weekCompareNoteEl.textContent = 'Change = this week − last week · target ' +
+      dailyTarget.toLocaleString() + ' kcal/day.';
+
+    const L = weekStats(lastWeek, totals);
+    const T = weekStats(thisWeek, totals);
+
+    // this week − last week, as a plain signed magnitude with a direction
+    // arrow — no "good/bad" colouring, since lower isn't universally better.
+    function delta(a, b, unit, digits) {
+      if (a === null || b === null) { return '—'; }
+      const d = b - a;
+      const eps = digits ? 0.05 : 0.5;
+      if (Math.abs(d) < eps) { return 'no change'; }
+      const mag = digits ? Math.abs(d).toFixed(digits) : Math.round(Math.abs(d)).toLocaleString();
+      return (d > 0 ? '↑ ' : '↓ ') + mag + (unit ? ' ' + unit : '');
+    }
+    function val(v, unit, digits) {
+      if (v === null) { return '—'; }
+      return (digits ? v.toFixed(digits) : Math.round(v).toLocaleString()) + (unit ? ' ' + unit : '');
+    }
+    function signed(v, unit) {
+      if (v === null) { return '—'; }
+      const r = Math.round(v);
+      return (r > 0 ? '+' : '') + r.toLocaleString() + (unit ? ' ' + unit : '');
+    }
+    function range(w) { return formatWeightDate(w[0]) + ' – ' + formatWeightDate(w[6]); }
+
+    const rows = [
+      ['Avg calories/day', val(L.avgCal, 'kcal'), val(T.avgCal, 'kcal'), delta(L.avgCal, T.avgCal, 'kcal')],
+      ['Avg vs target/day', signed(L.vsTarget, 'kcal'), signed(T.vsTarget, 'kcal'), delta(L.vsTarget, T.vsTarget, 'kcal')],
+      ['Days logged', L.loggedCount + ' / 7', T.loggedCount + ' / 7', delta(L.loggedCount, T.loggedCount, '')],
+      ['Avg weight', val(L.avgWeight, 'kg', 1), val(T.avgWeight, 'kg', 1), delta(L.avgWeight, T.avgWeight, 'kg', 1)]
+    ];
+
+    let html = '<tr><th></th><th>' + range(lastWeek) + '</th><th>' + range(thisWeek) + '</th><th>Change</th></tr>';
+    rows.forEach(function (r) {
+      html += '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] +
+        '</td><td class="change">' + r[3] + '</td></tr>';
+    });
+    weekCompareTableEl.innerHTML = html;
   }
 
   function renderTrend() {
