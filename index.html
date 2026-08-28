@@ -226,7 +226,6 @@
   #meal-food-weight,
   #meal-food-unit,
   #add-meal-ingredient-btn,
-  #reminder-time-input,
   .new-food-row input {
     font-family: var(--font-body);
     font-size: 15px;
@@ -242,17 +241,12 @@
   #meal-food-name,
   #meal-food-weight,
   #meal-food-unit,
-  #reminder-time-input,
   .new-food-row input {
     background: var(--paper-raised);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 10px 12px;
     color: var(--ink);
-  }
-
-  #reminder-time-input {
-    width: 150px;
   }
 
   #food-name,
@@ -944,7 +938,6 @@
       <button type="button" id="import-btn" class="ghost-btn">Import backup</button>
       <input type="file" id="import-file-input" accept="application/json,.json" class="hidden">
       <button type="button" id="theme-btn" class="ghost-btn">Theme: System</button>
-      <button type="button" id="reminder-btn" class="ghost-btn">Daily reminder: Off</button>
       <button type="button" id="install-btn" class="ghost-btn hidden">Install app</button>
     </div>
     <div id="import-confirm" class="new-food-fields hidden">
@@ -953,20 +946,6 @@
         <button type="button" id="import-confirm-btn">Replace</button>
         <button type="button" id="import-cancel-btn">Cancel</button>
       </div>
-    </div>
-    <div id="reminder-form" class="new-food-fields hidden">
-      <p class="new-food-label">Notifies you if nothing's logged yet by this time. Only fires while the app is open in a tab or running installed — fully closing it means no reminder.</p>
-      <div class="new-food-row">
-        <label>Remind me at
-          <input type="time" id="reminder-time-input">
-        </label>
-      </div>
-      <div class="entry-actions">
-        <button type="button" id="save-reminder-btn">Enable</button>
-        <button type="button" id="disable-reminder-btn" class="hidden">Turn off</button>
-        <button type="button" id="cancel-reminder-btn">Cancel</button>
-      </div>
-      <p class="empty-note hidden" id="reminder-permission-note" style="border: none; padding: 8px 0 0;"></p>
     </div>
   </footer>
 </div>
@@ -1151,10 +1130,6 @@
   let editingWeighInId = null;
   let goalWeight = loadGoalWeight();
 
-  // null = reminders off; otherwise an 'HH:MM' string checked against the
-  // clock. Follows the same null-means-not-set pattern as goalWeight/targets.
-  let reminderTime = loadReminderTime();
-
   // Firestore sync state. currentUid is the signed-in user (null = signed
   // out, localStorage only). firestoreReady flips true once the first
   // snapshot has been handled — until then, writes stay local and get
@@ -1299,13 +1274,6 @@
   const saveGoalWeightBtn = document.getElementById('save-goal-weight-btn');
   const weightMonthlyListEl = document.getElementById('weight-monthly-list');
   const weightYearlyListEl = document.getElementById('weight-yearly-list');
-  const reminderBtn = document.getElementById('reminder-btn');
-  const reminderForm = document.getElementById('reminder-form');
-  const reminderTimeInput = document.getElementById('reminder-time-input');
-  const saveReminderBtn = document.getElementById('save-reminder-btn');
-  const disableReminderBtn = document.getElementById('disable-reminder-btn');
-  const cancelReminderBtn = document.getElementById('cancel-reminder-btn');
-  const reminderPermissionNoteEl = document.getElementById('reminder-permission-note');
 
   // Looks up a saved food by name (case/whitespace-insensitive) — this is the
   // "did we already learn this food's nutrition?" check.
@@ -2545,15 +2513,6 @@
     return saved ? Number(saved) : null;
   }
 
-  function saveReminderTime() {
-    localStorage.setItem('calorie-reminder-time', reminderTime === null ? '' : reminderTime);
-  }
-
-  function loadReminderTime() {
-    const saved = localStorage.getItem('calorie-reminder-time');
-    return saved ? saved : null;
-  }
-
   function formatWeightDate(dateStr) {
     const date = new Date(dateStr + 'T00:00:00');
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -3684,120 +3643,10 @@
     render();
   });
 
-  function formatTimeLabel(hhmm) {
-    const parts = hhmm.split(':');
-    const d = new Date();
-    d.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
-    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  }
-
-  function updateReminderBtnLabel() {
-    reminderBtn.textContent = reminderTime ? 'Daily reminder: ' + formatTimeLabel(reminderTime) : 'Daily reminder: Off';
-  }
-
-  reminderBtn.addEventListener('click', function () {
-    reminderTimeInput.value = reminderTime || '18:00';
-    disableReminderBtn.classList.toggle('hidden', !reminderTime);
-    reminderPermissionNoteEl.classList.add('hidden');
-    reminderForm.classList.remove('hidden');
-    reminderBtn.classList.add('hidden');
-  });
-
-  cancelReminderBtn.addEventListener('click', function () {
-    reminderForm.classList.add('hidden');
-    reminderBtn.classList.remove('hidden');
-  });
-
-  saveReminderBtn.addEventListener('click', function () {
-    const time = reminderTimeInput.value;
-    if (!time) {
-      return;
-    }
-
-    if (!('Notification' in window)) {
-      reminderPermissionNoteEl.textContent = "This browser doesn't support notifications.";
-      reminderPermissionNoteEl.classList.remove('hidden');
-      return;
-    }
-
-    // Permission can only be requested from a real user gesture (this click),
-    // never silently on page load.
-    Notification.requestPermission().then(function (permission) {
-      if (permission !== 'granted') {
-        reminderPermissionNoteEl.textContent = 'Notifications are blocked — allow them for this site in your browser settings to use reminders.';
-        reminderPermissionNoteEl.classList.remove('hidden');
-        return;
-      }
-
-      reminderTime = time;
-      saveReminderTime();
-      updateReminderBtnLabel();
-      reminderForm.classList.add('hidden');
-      reminderBtn.classList.remove('hidden');
-    });
-  });
-
-  disableReminderBtn.addEventListener('click', function () {
-    reminderTime = null;
-    saveReminderTime();
-    updateReminderBtnLabel();
-    reminderForm.classList.add('hidden');
-    reminderBtn.classList.remove('hidden');
-  });
-
-  function showReminderNotification() {
-    const title = 'Calorie Deficit Log';
-    const options = { body: "Nothing logged yet today — don't forget to weigh and log.", icon: 'icon-192.png' };
-
-    // Routes through the service worker when one's registered (the GitHub
-    // Pages deploy) so the notification isn't tied to the tab staying
-    // focused; falls back to a plain Notification where there's no service
-    // worker at all (the Claude Artifact).
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistration().then(function (reg) {
-        if (reg) {
-          reg.showNotification(title, options);
-        } else {
-          new Notification(title, options);
-        }
-      }).catch(function () {
-        new Notification(title, options);
-      });
-    } else {
-      new Notification(title, options);
-    }
-  }
-
-  // Runs on load and every minute — fires at most once per day, only once the
-  // clock has passed the set time and nothing's logged yet today.
-  function maybeFireReminder() {
-    if (!reminderTime || !('Notification' in window) || Notification.permission !== 'granted') {
-      return;
-    }
-
-    const parts = reminderTime.split(':');
-    const reminderMoment = new Date();
-    reminderMoment.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
-    if (new Date() < reminderMoment) {
-      return;
-    }
-
-    if (localStorage.getItem('calorie-reminder-notified-date') === TODAY) {
-      return;
-    }
-
-    const loggedToday = entries.some(function (e) { return e.date === TODAY; });
-    if (loggedToday) {
-      return;
-    }
-
-    showReminderNotification();
-    localStorage.setItem('calorie-reminder-notified-date', TODAY);
-  }
-
-  updateReminderBtnLabel();
-  maybeFireReminder();
-  setInterval(maybeFireReminder, 60000);
+  // The daily-reminder feature (v1.22) was removed 2026-08-28 — D and Annelyn
+  // don't want notifications. Clear its leftover localStorage keys.
+  localStorage.removeItem('calorie-reminder-time');
+  localStorage.removeItem('calorie-reminder-notified-date');
 
   render();
 </script>
