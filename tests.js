@@ -170,4 +170,70 @@
   const clean = [{ id: 'a', date: '2026-08-01', weight: 100, unit: 'g', calories: 100, protein: 1, carbs: 1, fat: 1 }];
   eq('migrateEntries reports no change when nothing needs migrating',
     migrateEntries(clean, '2026-08-28').changed, false);
+
+  // ---------- totalsByDate ----------
+  const tbdEntries = [
+    { date: '2026-08-01', calories: 500 },
+    { date: '2026-08-01', calories: 300 },        // same day — should add
+    { date: '2026-08-02', calories: 700 },
+    { date: '2026-08-03', isMeal: true, calories: 850 } // a meal counts too
+  ];
+  const tbd = totalsByDate(tbdEntries);
+  eq('totalsByDate sums entries on the same date', tbd['2026-08-01'], 800);
+  eq('totalsByDate keeps separate dates separate', tbd['2026-08-02'], 700);
+  eq('totalsByDate counts a meal by its own calories', tbd['2026-08-03'], 850);
+  eq('totalsByDate of nothing is an empty object', Object.keys(totalsByDate([])).length, 0);
+
+  // ---------- groupAverages ----------
+  const gaTotals = {
+    '2026-07-15': 1800, '2026-07-20': 2000,  // July: 2 logged days
+    '2026-08-01': 1600                        // August: 1 logged day
+  };
+  const byMonth = groupAverages(gaTotals, monthKey);
+  eq('groupAverages sums a month bucket', byMonth['2026-07'].total, 3800);
+  eq('groupAverages counts days logged, not calendar days', byMonth['2026-07'].days, 2);
+  eq('groupAverages buckets a second month separately', byMonth['2026-08'].days, 1);
+  const byYear = groupAverages(gaTotals, yearKey);
+  eq('groupAverages can bucket by year', byYear['2026'].total, 5400);
+  eq('groupAverages by year counts every logged day', byYear['2026'].days, 3);
+
+  // ---------- groupWeightAverages ----------
+  const gwa = groupWeightAverages([
+    { date: '2026-07-10', weight: 94 },
+    { date: '2026-07-25', weight: 93 },
+    { date: '2026-08-05', weight: 92 }
+  ], monthKey);
+  close('groupWeightAverages sums a month', gwa['2026-07'].total, 187, 1e-9);
+  eq('groupWeightAverages counts weigh-ins in a month', gwa['2026-07'].count, 2);
+  eq('groupWeightAverages buckets the next month apart', gwa['2026-08'].count, 1);
+
+  // ---------- monthKey / yearKey ----------
+  eq('monthKey takes YYYY-MM', monthKey('2026-08-28'), '2026-08');
+  eq('yearKey takes YYYY', yearKey('2026-08-28'), '2026');
+
+  // ---------- lastNDates ----------
+  const l7 = lastNDates(7, '2026-08-28');
+  eq('lastNDates returns exactly n dates', l7.length, 7);
+  eq('lastNDates ends on todayStr', l7[6], '2026-08-28');
+  eq('lastNDates is oldest-first', l7[0], '2026-08-22');
+  eq('lastNDates second-to-last is the day before today', l7[5], '2026-08-27');
+  const lMonth = lastNDates(5, '2026-03-02');
+  eq('lastNDates crosses a month boundary correctly', lMonth[0], '2026-02-26');
+  eq('lastNDates(1) is just today', lastNDates(1, '2026-08-28')[0], '2026-08-28');
+
+  // ---------- getRecentFoods ----------
+  const feed = [
+    { name: 'Eggs', weight: 100, isMeal: false },
+    { name: 'Coffee', weight: 250 },
+    { name: 'Rice bowl', isMeal: true },       // meal — skipped
+    { name: 'eggs', weight: 120 },             // newer 'Eggs', case-insensitive dupe
+    { name: 'Toast', weight: 60 }
+  ];
+  const rf = getRecentFoods(feed, 5);
+  eq('getRecentFoods walks newest-first', rf[0].name, 'Toast');
+  eq('getRecentFoods de-dupes by name ignoring case (keeps the newest)', rf[1].name, 'eggs');
+  ok('getRecentFoods skips meals', rf.every(function (e) { return !e.isMeal; }), 'a meal slipped through');
+  eq('getRecentFoods returns 3 distinct non-meal foods here', rf.length, 3);
+  eq('getRecentFoods respects the limit', getRecentFoods(feed, 1).length, 1);
+  eq('getRecentFoods of nothing is empty', getRecentFoods([], 5).length, 0);
 })();

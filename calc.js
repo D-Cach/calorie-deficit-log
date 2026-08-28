@@ -169,3 +169,91 @@ function migrateEntries(entries, todayStr) {
   });
   return { entries: migrated, changed: changed };
 }
+
+// Total calories per date across all entries, e.g. { '2026-08-12': 1720 }.
+// Meals count too — a meal entry carries its own summed `calories`.
+function totalsByDate(entries) {
+  const totals = {};
+  entries.forEach(function (entry) {
+    totals[entry.date] = (totals[entry.date] || 0) + entry.calories;
+  });
+  return totals;
+}
+
+// The n calendar dates ending on todayStr, as 'YYYY-MM-DD' strings, oldest
+// first. Built from real dates, not from what's in `entries`, so an unlogged
+// day still appears (as a zero) instead of being skipped.
+function lastNDates(n, todayStr) {
+  const dates = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(todayStr + 'T00:00:00');
+    d.setDate(d.getDate() - i);
+    dates.push(formatDate(d));
+  }
+  return dates;
+}
+
+// The `limit` most recent distinct foods (by name, case/space-insensitive),
+// newest first. Meals are skipped — they have no single weight/unit to prefill
+// a "log again" with. Array order stands in for a timestamp.
+function getRecentFoods(entries, limit) {
+  const seen = new Set();
+  const recent = [];
+  for (let i = entries.length - 1; i >= 0 && recent.length < limit; i--) {
+    const entry = entries[i];
+    if (entry.isMeal) { continue; }
+    const key = entry.name.trim().toLowerCase();
+    if (seen.has(key)) { continue; }
+    seen.add(key);
+    recent.push(entry);
+  }
+  return recent;
+}
+
+// Buckets a { date: calories } map by whatever keyFn returns (a month or a
+// year), tracking summed calories and how many days actually had entries —
+// the average later divides by days logged, not by the calendar length of the
+// month/year, so unlogged gaps don't dilute it.
+function groupAverages(totals, keyFn) {
+  const groups = {};
+  Object.keys(totals).forEach(function (date) {
+    const key = keyFn(date);
+    if (!groups[key]) { groups[key] = { total: 0, days: 0 }; }
+    groups[key].total += totals[date];
+    groups[key].days += 1;
+  });
+  return groups;
+}
+
+// Buckets weigh-ins by month/year, summing weight and counting entries.
+// Separate from groupAverages because body weight has no "over target"
+// concept, so the rendering skips the bar/colour treatment entirely.
+function groupWeightAverages(weighIns, keyFn) {
+  const groups = {};
+  weighIns.forEach(function (w) {
+    const key = keyFn(w.date);
+    if (!groups[key]) { groups[key] = { total: 0, count: 0 }; }
+    groups[key].total += w.weight;
+    groups[key].count += 1;
+  });
+  return groups;
+}
+
+function monthKey(date) {
+  return date.slice(0, 7); // 'YYYY-MM'
+}
+
+function yearKey(date) {
+  return date.slice(0, 4); // 'YYYY'
+}
+
+function formatMonthLabel(key) {
+  const date = new Date(key + '-01T00:00:00');
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+// 'YYYY-MM-DD' -> a short "Aug 12"-style label.
+function formatWeightDate(dateStr) {
+  const date = new Date(dateStr + 'T00:00:00');
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}

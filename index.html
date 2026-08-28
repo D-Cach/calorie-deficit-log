@@ -1716,27 +1716,6 @@
     renderWeightView();
   }
 
-  // Walks entries newest-first, skipping meals (no single weight/unit to
-  // prefill) and de-duping by name — a food logged many times only shows its
-  // most recent weight/unit, since that's the one most likely to still apply.
-  function getRecentFoods(limit) {
-    const seen = new Set();
-    const recent = [];
-    for (let i = entries.length - 1; i >= 0 && recent.length < limit; i--) {
-      const entry = entries[i];
-      if (entry.isMeal) {
-        continue;
-      }
-      const key = entry.name.trim().toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      recent.push(entry);
-    }
-    return recent;
-  }
-
   // Fills the main entry form with a food's last-used weight/unit and selects
   // the weight text so retyping it (e.g. eggs with vs. without yolk) is a
   // single keystroke away — doesn't log anything itself, "Add" still does that.
@@ -1754,7 +1733,7 @@
   function renderRecentFoods() {
     recentFoodsListEl.innerHTML = '';
 
-    const recent = getRecentFoods(5);
+    const recent = getRecentFoods(entries, 5);
     recentFoodsBlockEl.classList.toggle('hidden', recent.length === 0);
 
     recent.forEach(function (entry) {
@@ -1790,7 +1769,7 @@
   }
 
   function renderStreak() {
-    const streak = calculateStreak(totalsByDate(), dailyTarget, TODAY);
+    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY);
     streakLineEl.innerHTML = '';
 
     if (streak === 0) {
@@ -1805,28 +1784,6 @@
 
     streakLineEl.appendChild(label);
     streakLineEl.appendChild(count);
-  }
-
-  // Totals grouped by date, e.g. { '2026-08-12': 1720, '2026-08-13': 520 }
-  function totalsByDate() {
-    const totals = {};
-    entries.forEach(function (entry) {
-      totals[entry.date] = (totals[entry.date] || 0) + entry.calories;
-    });
-    return totals;
-  }
-
-  // The last n calendar dates as 'YYYY-MM-DD' strings, oldest first, today last —
-  // built from real dates, not from what happens to be in `entries`, so a day
-  // with nothing logged still shows up as a zero instead of being skipped.
-  function lastNDates(n) {
-    const dates = [];
-    for (let i = n - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      dates.push(formatDate(d));
-    }
-    return dates;
   }
 
   function renderToday() {
@@ -2060,7 +2017,7 @@
   function renderHistory() {
     historyListEl.innerHTML = '';
 
-    const totals = totalsByDate();
+    const totals = totalsByDate(entries);
     const dates = Object.keys(totals).sort().reverse();
 
     if (dates.length === 0) {
@@ -2104,37 +2061,6 @@
       li.appendChild(total);
       historyListEl.appendChild(li);
     });
-  }
-
-  // Groups every logged day's total into buckets keyed by whatever keyFn
-  // returns (a month or a year), tracking both the summed calories and how
-  // many days actually had entries — the average divides by days logged,
-  // not by the calendar length of the month/year, since not every day gets weighed.
-  function groupAverages(keyFn) {
-    const totals = totalsByDate();
-    const groups = {};
-    Object.keys(totals).forEach(function (date) {
-      const key = keyFn(date);
-      if (!groups[key]) {
-        groups[key] = { total: 0, days: 0 };
-      }
-      groups[key].total += totals[date];
-      groups[key].days += 1;
-    });
-    return groups;
-  }
-
-  function monthKey(date) {
-    return date.slice(0, 7); // 'YYYY-MM'
-  }
-
-  function yearKey(date) {
-    return date.slice(0, 4); // 'YYYY'
-  }
-
-  function formatMonthLabel(key) {
-    const date = new Date(key + '-01T00:00:00');
-    return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   }
 
   function renderStatList(container, groups, formatLabel, emptyText) {
@@ -2187,21 +2113,21 @@
   }
 
   function renderMonthly() {
-    renderStatList(monthlyListEl, groupAverages(monthKey), formatMonthLabel, 'No months logged yet.');
+    renderStatList(monthlyListEl, groupAverages(totalsByDate(entries), monthKey), formatMonthLabel, 'No months logged yet.');
   }
 
   function renderYearly() {
-    renderStatList(yearlyListEl, groupAverages(yearKey), function (key) { return key; }, 'No years logged yet.');
+    renderStatList(yearlyListEl, groupAverages(totalsByDate(entries), yearKey), function (key) { return key; }, 'No years logged yet.');
   }
 
   // "This week" and "last week" are the two most recent COMPLETE 7-day
   // windows — today is excluded so a half-logged current day can't skew the
   // comparison.
   function renderWeekComparison() {
-    const span = lastNDates(15);       // [today-14 .. today], oldest first
+    const span = lastNDates(15, TODAY); // [today-14 .. today], oldest first
     const lastWeek = span.slice(0, 7); // today-14 .. today-8
     const thisWeek = span.slice(7, 14); // today-7 .. today-1
-    const totals = totalsByDate();
+    const totals = totalsByDate(entries);
 
     const anyLogged = span.slice(0, 14).some(function (d) { return totals[d] > 0; });
     const anyWeight = weighIns.some(function (w) { return w.date >= lastWeek[0] && w.date <= thisWeek[6]; });
@@ -2253,8 +2179,8 @@
   }
 
   function renderTrend() {
-    const totals = totalsByDate();
-    const dates = lastNDates(7);
+    const totals = totalsByDate(entries);
+    const dates = lastNDates(7, TODAY);
     const dayTotals = dates.map(function (date) { return totals[date] || 0; });
 
     const avg = Math.round(dayTotals.reduce(function (sum, v) { return sum + v; }, 0) / dayTotals.length);
@@ -2643,11 +2569,6 @@
     return saved ? Number(saved) : null;
   }
 
-  function formatWeightDate(dateStr) {
-    const date = new Date(dateStr + 'T00:00:00');
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-
   function renderWeightView() {
     renderWeighInsList();
     renderWeightLatestLine();
@@ -2663,7 +2584,7 @@
   // mostly water noise). Then suggests a daily target for a chosen weekly loss
   // rate. Refuses to show a number unless there's enough data to mean anything.
   function renderAdaptiveTarget() {
-    const windowDates = lastNDates(TDEE_WINDOW_DAYS); // oldest first, today last
+    const windowDates = lastNDates(TDEE_WINDOW_DAYS, TODAY); // oldest first, today last
     const windowStart = windowDates[0];
     const inWindow = function (d) { return d >= windowStart && d <= TODAY; };
 
@@ -2680,7 +2601,7 @@
 
     // Logged intake in the window — only days with something logged, so gaps
     // don't drag the average down toward zero.
-    const totals = totalsByDate();
+    const totals = totalsByDate(entries);
     const loggedDays = windowDates.filter(function (d) { return totals[d] > 0; });
     const loggedCount = loggedDays.length;
     const avgIntake = loggedCount
@@ -2776,23 +2697,6 @@
     render();
   });
 
-  // Groups weigh-ins by month/year, averaging the logged values directly —
-  // unlike groupAverages() for calories, there's no "over target" concept for
-  // body weight, so this skips the bar/color treatment entirely rather than
-  // forcing weight into a shape built for a different kind of number.
-  function groupWeightAverages(keyFn) {
-    const groups = {};
-    weighIns.forEach(function (w) {
-      const key = keyFn(w.date);
-      if (!groups[key]) {
-        groups[key] = { total: 0, count: 0 };
-      }
-      groups[key].total += w.weight;
-      groups[key].count += 1;
-    });
-    return groups;
-  }
-
   function renderWeightStatList(container, groups, formatLabel, emptyText) {
     container.innerHTML = '';
 
@@ -2828,11 +2732,11 @@
   }
 
   function renderWeightMonthly() {
-    renderWeightStatList(weightMonthlyListEl, groupWeightAverages(monthKey), formatMonthLabel, 'No months logged yet.');
+    renderWeightStatList(weightMonthlyListEl, groupWeightAverages(weighIns, monthKey), formatMonthLabel, 'No months logged yet.');
   }
 
   function renderWeightYearly() {
-    renderWeightStatList(weightYearlyListEl, groupWeightAverages(yearKey), function (key) { return key; }, 'No years logged yet.');
+    renderWeightStatList(weightYearlyListEl, groupWeightAverages(weighIns, yearKey), function (key) { return key; }, 'No years logged yet.');
   }
 
   function renderWeighInsList() {
@@ -3398,7 +3302,7 @@
     const protein = todaysEntries.reduce(function (sum, e) { return sum + e.protein; }, 0);
     const carbs = todaysEntries.reduce(function (sum, e) { return sum + e.carbs; }, 0);
     const fat = todaysEntries.reduce(function (sum, e) { return sum + e.fat; }, 0);
-    const streak = calculateStreak(totalsByDate(), dailyTarget, TODAY);
+    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY);
     const dateLabel = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
     const lines = [];
