@@ -1211,24 +1211,22 @@
   });
 </script>
 
+<!-- Pure calculation helpers (formatDate, round1/2, calcNutrition, linearFit,
+     …). Kept in their own file so the test suite (tests.html) can load and
+     assert against them without any of the app's DOM. Must load before the
+     main script below, which calls them as plain globals. -->
+<script src="calc.js"></script>
+
 <script>
   const DEFAULT_DAILY_TARGET = 1850;
 
-  // 'YYYY-MM-DD' for a given Date, in local time — the one place this
-  // formatting happens, reused everywhere a date needs to become a string key.
-  function formatDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return year + '-' + month + '-' + day;
-  }
-
+  // "Today" as a 'YYYY-MM-DD' string. Not in calc.js — it reads the clock, so
+  // it isn't a pure function of its inputs (formatDate, which it calls, is).
   function getTodayDate() {
     return formatDate(new Date());
   }
 
   const TODAY = getTodayDate();
-  const OZ_TO_G = 28.3495;
   // Fat is 9 kcal/g; protein and carbs are both 4 kcal/g — needed to turn
   // grams of each macro into its real share of the day's calories.
   const MACRO_KCAL_PER_G = { protein: 4, carbs: 4, fat: 9 };
@@ -1426,36 +1424,6 @@
   function findFood(name) {
     const key = name.trim().toLowerCase();
     return foods.find(function (f) { return f.name.trim().toLowerCase() === key; }) || null;
-  }
-
-  // Scales a food's saved nutrition (per whatever amount it was recorded
-  // against — the label's serving size, not always 100) to whatever weight
-  // was actually logged — this is what makes the math "automatic" for any
-  // weight, not just one fixed amount. Older foods saved before per-amount
-  // was editable default to 100 via the fallback.
-  function calcNutrition(food, weight, unit) {
-    const grams = unit === 'oz' ? weight * OZ_TO_G : weight;
-    const ratio = grams / (food.perGrams || 100);
-    return {
-      calories: Math.round(food.caloriesPer100g * ratio),
-      protein: round1(food.proteinPer100g * ratio),
-      carbs: round1(food.carbsPer100g * ratio),
-      fat: round1(food.fatPer100g * ratio)
-    };
-  }
-
-  function round1(value) {
-    return Math.round(value * 10) / 10;
-  }
-
-  function round2(value) {
-    return Math.round(value * 100) / 100;
-  }
-
-  // Whole days from date string a to date string b (both 'YYYY-MM-DD').
-  function daysBetweenDates(a, b) {
-    const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime();
-    return Math.round(ms / 86400000);
   }
 
   // Shows the "teach me this food" fields only when the typed name isn't
@@ -2764,33 +2732,6 @@
     renderWeightYearly();
   }
 
-  // Least-squares straight-line fit through {x, y} points. Returns the slope
-  // (y units per x unit), the intercept, and R² (0–1, how much of the spread
-  // in y the line actually explains — a low value means the points are mostly
-  // noise around the line, so the slope shouldn't be trusted). Used to read a
-  // real weight trend out of noisy day-to-day weigh-ins.
-  function linearFit(points) {
-    const n = points.length;
-    if (n < 2) { return null; }
-    let sx = 0, sy = 0, sxx = 0, sxy = 0;
-    points.forEach(function (p) {
-      sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y;
-    });
-    const denom = n * sxx - sx * sx;
-    if (denom === 0) { return null; } // every point on the same day
-    const slope = (n * sxy - sx * sy) / denom;
-    const intercept = (sy - slope * sx) / n;
-    const meanY = sy / n;
-    let ssTot = 0, ssRes = 0;
-    points.forEach(function (p) {
-      const pred = slope * p.x + intercept;
-      ssTot += (p.y - meanY) * (p.y - meanY);
-      ssRes += (p.y - pred) * (p.y - pred);
-    });
-    const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
-    return { slope: slope, intercept: intercept, r2: r2 };
-  }
-
   // Estimates maintenance calories (TDEE) from the last TDEE_WINDOW_DAYS:
   // average logged intake, minus the calorie value of the weight trend over
   // the same period (a fitted slope, not first-vs-last, since daily weight is
@@ -3111,24 +3052,6 @@
     goalWeightForm.classList.add('hidden');
     editGoalWeightBtn.classList.remove('hidden');
   });
-
-  // For each weigh-in, averages every entry within the trailing 7 days up to
-  // and including that date — a real rolling average, not just one number
-  // for "the last 7 days." Smooths out the day-to-day water/sodium noise
-  // D's own tracking notes call out, without throwing away the raw points.
-  function calculateRollingWeightAverage(sortedOldestFirst) {
-    return sortedOldestFirst.map(function (weighIn) {
-      const cutoff = new Date(weighIn.date + 'T00:00:00');
-      cutoff.setDate(cutoff.getDate() - 6);
-      const cutoffStr = formatDate(cutoff);
-
-      const windowEntries = sortedOldestFirst.filter(function (w) {
-        return w.date >= cutoffStr && w.date <= weighIn.date;
-      });
-      const sum = windowEntries.reduce(function (total, w) { return total + w.weight; }, 0);
-      return sum / windowEntries.length;
-    });
-  }
 
   // Unlike the calorie bar chart, this axis deliberately does NOT start at
   // zero — body weight only ever moves within a small relative range, so a

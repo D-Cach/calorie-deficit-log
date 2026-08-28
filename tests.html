@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calorie Deficit Log — tests</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    max-width: 780px;
+    margin: 28px auto;
+    padding: 0 16px;
+    background: #1b1c17;
+    color: #ece8db;
+    line-height: 1.5;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p.lead { color: #a4a793; font-size: 13px; margin: 0 0 18px; }
+  #summary {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+  #summary.pass { background: #24401f; color: #b6e0a8; }
+  #summary.fail { background: #4a1f16; color: #f0b8a0; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 5px 0; border-bottom: 1px solid #33352c; font-size: 13px; }
+  li::before { font-weight: 700; margin-right: 8px; }
+  li.ok::before { content: "PASS"; color: #8bab7d; }
+  li.bad::before { content: "FAIL"; color: #e08a6b; }
+  li.bad { color: #f0b8a0; }
+</style>
+</head>
+<body>
+<h1>Calorie Deficit Log — pure function tests</h1>
+<p class="lead">Runs <code>tests.js</code> against <code>calc.js</code>. Nothing links here; open it directly (<code>/tests.html</code>) when you change a calc function.</p>
+<div id="summary">running…</div>
+<ul id="results"></ul>
+
+<script src="calc.js"></script>
+<script src="tests.js"></script>
+<script>
+  (function () {
+    var list = document.getElementById('results');
+    var summary = document.getElementById('summary');
+    var all = window.__testResults || [];
+
+    all.forEach(function (r) {
+      var li = document.createElement('li');
+      li.className = r.ok ? 'ok' : 'bad';
+      li.textContent = r.name;
+      list.appendChild(li);
+    });
+
+    var failed = all.filter(function (r) { return !r.ok; }).length;
+    var passed = all.length - failed;
+    summary.textContent = passed + ' passed, ' + failed + ' failed';
+    summary.className = failed === 0 ? 'pass' : 'fail';
+    document.title = (failed === 0 ? '✓ ' : '✗ ') + document.title;
+  })();
+</script>
+</body>
+</html>

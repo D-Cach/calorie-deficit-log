@@ -1,9 +1,10 @@
 // Service worker: runs separately from the page, in the background, even
 // when no tab is open — this is what makes offline support possible at all.
-const CACHE_NAME = 'calorie-deficit-log-v4';
+const CACHE_NAME = 'calorie-deficit-log-v5';
 const APP_SHELL = [
   './',
   './index.html',
+  './calc.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
