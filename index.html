@@ -236,6 +236,41 @@
     gap: 8px;
   }
 
+  .entry-date-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  .entry-date-row label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 12px;
+  }
+
+  .entry-date-row input[type="date"] {
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--ink);
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+
+  /* When the log form is pointed at a day other than today, make that
+     unmistakable so a stuck past date can't quietly collect today's food. */
+  .entry-date-row.off-today input[type="date"],
+  .entry-date-row.off-today label {
+    color: var(--gold);
+  }
+
+  .entry-date-row.off-today input[type="date"] {
+    border-color: var(--gold);
+  }
+
   #food-name,
   #food-weight,
   #food-unit,
@@ -703,6 +738,67 @@
     color: var(--clay);
   }
 
+  /* History day rows expand to reveal that day's entries. The <li> switches
+     from the .stat-list flex row to a column; its header carries the flex
+     row instead so the label/total layout is unchanged. */
+  .stat-list li.history-day {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .history-day-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+  }
+
+  .history-day-toggle {
+    display: inline-block;
+    width: 1.1em;
+    color: var(--ink-soft);
+  }
+
+  .day-detail {
+    padding: 6px 0 4px;
+  }
+
+  .day-detail .row-list {
+    margin-bottom: 6px;
+  }
+
+  /* #history-list is a .stat-list, so its `.stat-list li` rule (centered,
+     space-between) otherwise bleeds onto the entry rows nested in the panel —
+     restore the .row-list column layout explicitly. */
+  .day-detail .row-list li {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 4px;
+  }
+
+  .day-detail-add {
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--moss-deep);
+    background: none;
+    border: none;
+    padding: 4px 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .day-detail-add:hover {
+    color: var(--moss);
+  }
+
+  .app.readonly .day-detail-add {
+    display: none !important;
+  }
+
   .chart-legend {
     display: flex;
     gap: 14px;
@@ -838,6 +934,12 @@
         </select>
         <button type="submit">Add</button>
       </div>
+      <div class="entry-date-row" id="entry-date-row">
+        <label for="entry-date">Day</label>
+        <input type="date" id="entry-date">
+        <button type="button" id="entry-date-today-btn" class="ghost-btn hidden">back to today</button>
+      </div>
+      <p class="empty-note hidden" id="entry-date-note" style="border: none; padding: 4px 0 0; color: var(--gold);"></p>
       <div id="new-food-fields" class="new-food-fields hidden">
         <p class="new-food-label">New food — nutrition per this amount:</p>
         <div class="new-food-row">
@@ -1242,6 +1344,8 @@
   let foods = loadFoods();
   let editingId = null;
   let editingFoodId = null;
+  // History-tab day rows that are currently expanded to show their entries.
+  let expandedHistoryDates = new Set();
   // Ingredients being assembled in the meal builder before "Log meal" rolls
   // them into one combined entry — not saved to entries until that click.
   let mealIngredients = [];
@@ -1300,6 +1404,10 @@
   const foodSuggestionsEl = document.getElementById('food-suggestions');
   const weightInput = document.getElementById('food-weight');
   const unitSelect = document.getElementById('food-unit');
+  const entryDateInput = document.getElementById('entry-date');
+  const entryDateRowEl = document.getElementById('entry-date-row');
+  const entryDateTodayBtn = document.getElementById('entry-date-today-btn');
+  const entryDateNoteEl = document.getElementById('entry-date-note');
   const newFoodFieldsEl = document.getElementById('new-food-fields');
   const newPerInput = document.getElementById('new-food-per');
   const newCaloriesInput = document.getElementById('new-food-calories');
@@ -1413,6 +1521,46 @@
 
   nameInput.addEventListener('input', updateFoodFieldsVisibility);
 
+  // The log form normally targets today, but the date field lets an entry
+  // land on (or be moved to) any day — for a meal forgotten yesterday, or
+  // fixing a day that came out wrong. The chosen day stays put across
+  // successive adds (so several forgotten items go in without re-picking);
+  // "back to today" and a page reload both return it to today.
+  function currentLogDate() {
+    return entryDateInput.value || TODAY;
+  }
+
+  function updateEntryDateUI() {
+    entryDateRowEl.classList.toggle('off-today', currentLogDate() !== TODAY);
+    entryDateTodayBtn.classList.toggle('hidden', currentLogDate() === TODAY);
+  }
+
+  let entryDateNoteTimer = null;
+
+  function flashEntryDateNote(dateStr) {
+    entryDateNoteEl.textContent = 'Logged to ' + formatWeightDate(dateStr) + ' — shown in the History tab.';
+    entryDateNoteEl.classList.remove('hidden');
+    if (entryDateNoteTimer) { clearTimeout(entryDateNoteTimer); }
+    entryDateNoteTimer = setTimeout(function () {
+      entryDateNoteEl.classList.add('hidden');
+    }, 5000);
+  }
+
+  function hideEntryDateNote() {
+    if (entryDateNoteTimer) { clearTimeout(entryDateNoteTimer); entryDateNoteTimer = null; }
+    entryDateNoteEl.classList.add('hidden');
+  }
+
+  entryDateInput.value = TODAY;
+  updateEntryDateUI();
+  entryDateInput.addEventListener('input', updateEntryDateUI);
+  entryDateInput.addEventListener('change', updateEntryDateUI);
+  entryDateTodayBtn.addEventListener('click', function () {
+    entryDateInput.value = TODAY;
+    updateEntryDateUI();
+    hideEntryDateNote();
+  });
+
   form.addEventListener('submit', function (event) {
     event.preventDefault();
     if (viewingUid) { return; }
@@ -1420,6 +1568,7 @@
     const name = nameInput.value.trim();
     const weight = Number(weightInput.value);
     const unit = unitSelect.value;
+    const logDate = currentLogDate();
 
     let food = findFood(foods, name);
     if (!food) {
@@ -1447,6 +1596,7 @@
       entry.protein = nutrition.protein;
       entry.carbs = nutrition.carbs;
       entry.fat = nutrition.fat;
+      entry.date = logDate; // lets an edit also fix a mis-dated entry
       editingId = null;
       submitBtn.textContent = 'Add';
     } else {
@@ -1459,7 +1609,7 @@
         protein: nutrition.protein,
         carbs: nutrition.carbs,
         fat: nutrition.fat,
-        date: TODAY
+        date: logDate
       });
     }
 
@@ -1468,6 +1618,12 @@
 
     form.reset();
     newFoodFieldsEl.classList.add('hidden');
+    // form.reset() blanks the date input — restore the chosen day so it stays
+    // put for the next add, and confirm any non-today log (it won't appear in
+    // the Today list).
+    entryDateInput.value = logDate;
+    updateEntryDateUI();
+    if (logDate !== TODAY) { flashEntryDateNote(logDate); } else { hideEntryDateNote(); }
     nameInput.focus();
   });
 
@@ -1476,9 +1632,12 @@
     nameInput.value = entry.name;
     weightInput.value = entry.weight;
     unitSelect.value = entry.unit;
+    entryDateInput.value = entry.date;
+    updateEntryDateUI();
     editingId = id;
     submitBtn.textContent = 'Save';
     updateFoodFieldsVisibility();
+    showView('today'); // the entry may have been opened from the History tab
     nameInput.focus();
   }
 
@@ -1490,6 +1649,8 @@
       editingId = null;
       submitBtn.textContent = 'Add';
       form.reset();
+      entryDateInput.value = TODAY;
+      updateEntryDateUI();
     }
 
     if (editingMealId === id) {
@@ -1497,6 +1658,12 @@
       mealBuilderFieldsEl.classList.add('hidden');
       toggleMealBuilderBtn.classList.remove('hidden');
     }
+
+    // Drop any expanded-History days that no longer have entries.
+    const liveDates = totalsByDate(entries);
+    Array.from(expandedHistoryDates).forEach(function (d) {
+      if (!(d in liveDates)) { expandedHistoryDates.delete(d); }
+    });
 
     saveEntries();
     render();
@@ -1639,10 +1806,13 @@
     editingMealId = id;
     mealNameInput.value = entry.name;
     mealIngredients = entry.components.slice();
+    entryDateInput.value = entry.date;
+    updateEntryDateUI();
     renderMealIngredientsList();
     mealBuilderFieldsEl.classList.remove('hidden');
     toggleMealBuilderBtn.classList.add('hidden');
     logMealBtn.textContent = 'Save meal';
+    showView('today'); // the meal may have been opened from the History tab
     mealNameInput.focus();
   }
 
@@ -1673,6 +1843,8 @@
       return sum;
     }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
 
+    const logDate = currentLogDate();
+
     if (editingMealId !== null) {
       const entry = entries.find(function (e) { return e.id === editingMealId; });
       entry.name = mealName;
@@ -1681,6 +1853,7 @@
       entry.protein = round1(totals.protein);
       entry.carbs = round1(totals.carbs);
       entry.fat = round1(totals.fat);
+      entry.date = logDate;
     } else {
       entries.push({
         id: crypto.randomUUID(),
@@ -1691,9 +1864,11 @@
         protein: round1(totals.protein),
         carbs: round1(totals.carbs),
         fat: round1(totals.fat),
-        date: TODAY
+        date: logDate
       });
     }
+
+    if (logDate !== TODAY) { flashEntryDateNote(logDate); } else { hideEntryDateNote(); }
 
     saveEntries();
     render();
@@ -1786,6 +1961,81 @@
     streakLineEl.appendChild(count);
   }
 
+  // One entry's <li> for a row list. Used by both the Today list and the
+  // expandable History day panels, so an entry looks and behaves identically
+  // wherever it shows. Edit routes to the main form / meal builder (which now
+  // carry the entry's date); Delete works on any date. Both buttons are
+  // hidden by CSS while viewing the other person's log.
+  function buildEntryListItem(entry) {
+    const li = document.createElement('li');
+
+    const main = document.createElement('div');
+    main.className = 'entry-main';
+
+    const label = document.createElement('span');
+    label.className = 'entry-name';
+    label.textContent = entry.name;
+
+    const weight = document.createElement('span');
+    weight.className = 'entry-weight';
+    weight.textContent = entry.isMeal
+      ? entry.components.length + (entry.components.length === 1 ? ' ingredient' : ' ingredients')
+      : formatWeight(entry.weight, entry.unit);
+
+    const cal = document.createElement('span');
+    cal.className = 'entry-cal';
+    cal.textContent = entry.calories + ' kcal';
+
+    const actions = document.createElement('div');
+    actions.className = 'entry-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', function () {
+      if (entry.isMeal) {
+        startEditMeal(entry.id);
+      } else {
+        startEdit(entry.id);
+      }
+    });
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', function () {
+      deleteEntry(entry.id);
+    });
+
+    actions.appendChild(deleteBtn);
+    main.appendChild(label);
+    main.appendChild(weight);
+    main.appendChild(cal);
+    main.appendChild(actions);
+
+    const macros = document.createElement('div');
+    macros.className = 'entry-macros';
+    macros.textContent = formatMacros(entry.protein, entry.carbs, entry.fat);
+
+    li.appendChild(main);
+    li.appendChild(macros);
+
+    // Shows what's actually in a meal, since the main row only shows the
+    // combined total — without this a meal would be an opaque black box.
+    if (entry.isMeal) {
+      const ingredientsLine = document.createElement('div');
+      ingredientsLine.className = 'entry-macros';
+      ingredientsLine.textContent = entry.components.map(function (c) {
+        return c.name + ' (' + formatWeight(c.weight, c.unit) + ')';
+      }).join(', ');
+      li.appendChild(ingredientsLine);
+    }
+
+    return li;
+  }
+
   function renderToday() {
     listEl.innerHTML = '';
 
@@ -1800,73 +2050,7 @@
     }
 
     todaysEntries.forEach(function (entry) {
-      const li = document.createElement('li');
-
-      const main = document.createElement('div');
-      main.className = 'entry-main';
-
-      const label = document.createElement('span');
-      label.className = 'entry-name';
-      label.textContent = entry.name;
-
-      const weight = document.createElement('span');
-      weight.className = 'entry-weight';
-      weight.textContent = entry.isMeal
-        ? entry.components.length + (entry.components.length === 1 ? ' ingredient' : ' ingredients')
-        : formatWeight(entry.weight, entry.unit);
-
-      const cal = document.createElement('span');
-      cal.className = 'entry-cal';
-      cal.textContent = entry.calories + ' kcal';
-
-      const actions = document.createElement('div');
-      actions.className = 'entry-actions';
-
-      const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', function () {
-        if (entry.isMeal) {
-          startEditMeal(entry.id);
-        } else {
-          startEdit(entry.id);
-        }
-      });
-      actions.appendChild(editBtn);
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'delete-btn';
-      deleteBtn.textContent = 'Delete';
-      deleteBtn.addEventListener('click', function () {
-        deleteEntry(entry.id);
-      });
-
-      actions.appendChild(deleteBtn);
-      main.appendChild(label);
-      main.appendChild(weight);
-      main.appendChild(cal);
-      main.appendChild(actions);
-
-      const macros = document.createElement('div');
-      macros.className = 'entry-macros';
-      macros.textContent = formatMacros(entry.protein, entry.carbs, entry.fat);
-
-      li.appendChild(main);
-      li.appendChild(macros);
-
-      // Shows what's actually in a meal, since the main row only shows the
-      // combined total — without this a meal would be an opaque black box.
-      if (entry.isMeal) {
-        const ingredientsLine = document.createElement('div');
-        ingredientsLine.className = 'entry-macros';
-        ingredientsLine.textContent = entry.components.map(function (c) {
-          return c.name + ' (' + formatWeight(c.weight, c.unit) + ')';
-        }).join(', ');
-        li.appendChild(ingredientsLine);
-      }
-
-      listEl.appendChild(li);
+      listEl.appendChild(buildEntryListItem(entry));
     });
 
     const total = todaysEntries.reduce(function (sum, entry) {
@@ -2033,15 +2217,32 @@
       const dayTotal = totals[date];
       const over = dayTotal > dailyTarget;
       const pct = Math.min(dayTotal / dailyTarget, 1) * 100;
+      const expanded = expandedHistoryDates.has(date);
 
       const li = document.createElement('li');
+      li.className = 'history-day';
+
+      const header = document.createElement('div');
+      header.className = 'history-day-header';
+      header.addEventListener('click', function () {
+        if (expandedHistoryDates.has(date)) {
+          expandedHistoryDates.delete(date);
+        } else {
+          expandedHistoryDates.add(date);
+        }
+        renderHistory();
+      });
 
       const labelWrap = document.createElement('div');
       labelWrap.className = 'day-row-label';
 
       const name = document.createElement('span');
       name.className = 'day-name';
-      name.textContent = date === TODAY ? 'Today' : date;
+      const toggle = document.createElement('span');
+      toggle.className = 'history-day-toggle';
+      toggle.textContent = expanded ? '▾' : '▸';
+      name.appendChild(toggle);
+      name.appendChild(document.createTextNode(date === TODAY ? 'Today' : date));
 
       const bar = document.createElement('div');
       bar.className = 'day-bar';
@@ -2057,10 +2258,57 @@
       total.className = 'day-total' + (over ? ' over' : '');
       total.textContent = dayTotal.toLocaleString() + ' kcal';
 
-      li.appendChild(labelWrap);
-      li.appendChild(total);
+      header.appendChild(labelWrap);
+      header.appendChild(total);
+      li.appendChild(header);
+
+      if (expanded) {
+        li.appendChild(buildDayDetail(date));
+      }
+
       historyListEl.appendChild(li);
     });
+  }
+
+  // The panel shown under an expanded History day: that day's entries (same
+  // rows as the Today list, so Edit/Delete behave identically) plus a
+  // shortcut that points the log form at this date for a forgotten item.
+  function buildDayDetail(date) {
+    const detail = document.createElement('div');
+    detail.className = 'day-detail';
+
+    const dayEntries = entries.filter(function (e) { return e.date === date; });
+
+    if (dayEntries.length === 0) {
+      const note = document.createElement('p');
+      note.className = 'empty-note';
+      note.style.border = 'none';
+      note.textContent = 'Nothing logged this day.';
+      detail.appendChild(note);
+    } else {
+      const ul = document.createElement('ul');
+      ul.className = 'row-list';
+      dayEntries.forEach(function (entry) {
+        ul.appendChild(buildEntryListItem(entry));
+      });
+      detail.appendChild(ul);
+    }
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'day-detail-add';
+    addBtn.textContent = '+ Add food to this day';
+    addBtn.addEventListener('click', function () {
+      if (viewingUid) { return; }
+      entryDateInput.value = date;
+      updateEntryDateUI();
+      hideEntryDateNote();
+      showView('today');
+      nameInput.focus();
+    });
+    detail.appendChild(addBtn);
+
+    return detail;
   }
 
   function renderStatList(container, groups, formatLabel, emptyText) {
@@ -3668,6 +3916,9 @@
     form.reset();
     weightForm.reset();
     weightDateInput.value = getTodayDate();
+    entryDateInput.value = TODAY;
+    updateEntryDateUI();
+    hideEntryDateNote();
     newFoodFieldsEl.classList.add('hidden');
     targetForm.classList.add('hidden');
     editTargetBtn.classList.remove('hidden');
@@ -3676,6 +3927,7 @@
     resetMealBuilder();
     mealBuilderFieldsEl.classList.add('hidden');
     toggleMealBuilderBtn.classList.remove('hidden');
+    expandedHistoryDates.clear();
     foodSearchQuery = '';
     if (foodSearchInput) {
       foodSearchInput.value = '';
