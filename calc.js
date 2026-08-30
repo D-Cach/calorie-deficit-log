@@ -104,15 +104,22 @@ function findFood(foods, name) {
 // An empty today doesn't break the streak — it's still in progress, so the
 // count starts from yesterday in that case. A while loop (not map/reduce)
 // because it has to stop at the first day that ends the streak.
-function calculateStreak(totals, dailyTarget, todayStr) {
+//
+// `cheatDays` (array of 'YYYY-MM-DD') are days the user marked as planned cheat
+// days: they always count as a day in the streak and never break it, whatever
+// was logged. An empty *non-cheat* today still doesn't break it.
+function calculateStreak(totals, dailyTarget, todayStr, cheatDays) {
+  const cheat = new Set(cheatDays || []);
   const cursor = new Date(todayStr + 'T00:00:00');
-  if (!totals[formatDate(cursor)]) {
+  const todayKey = formatDate(cursor);
+  if (!totals[todayKey] && !cheat.has(todayKey)) {
     cursor.setDate(cursor.getDate() - 1);
   }
   let streak = 0;
   while (true) {
-    const total = totals[formatDate(cursor)];
-    if (total === undefined || total > dailyTarget) { break; }
+    const key = formatDate(cursor);
+    const total = totals[key];
+    if (!cheat.has(key) && (total === undefined || total > dailyTarget)) { break; }
     streak += 1;
     cursor.setDate(cursor.getDate() - 1);
   }

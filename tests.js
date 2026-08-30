@@ -120,15 +120,26 @@
     '2026-08-25': 2200, // over target — ends the streak here
     '2026-08-24': 1600
   };
-  eq('calculateStreak counts consecutive under-target days', calculateStreak(t, 2000, '2026-08-28'), 3);
+  eq('calculateStreak counts consecutive under-target days', calculateStreak(t, 2000, '2026-08-28', []), 3);
   eq('calculateStreak stops at an over-target day',
-    calculateStreak({ '2026-08-28': 2500, '2026-08-27': 1500 }, 2000, '2026-08-28'), 0);
+    calculateStreak({ '2026-08-28': 2500, '2026-08-27': 1500 }, 2000, '2026-08-28', []), 0);
   eq('calculateStreak: an empty today does not break the run — count from yesterday',
-    calculateStreak({ '2026-08-27': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28'), 2);
+    calculateStreak({ '2026-08-27': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28', []), 2);
   eq('calculateStreak stops at the first unlogged gap',
-    calculateStreak({ '2026-08-28': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28'), 1);
+    calculateStreak({ '2026-08-28': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28', []), 1);
   eq('calculateStreak: a day exactly on target still counts',
-    calculateStreak({ '2026-08-28': 2000, '2026-08-27': 2000 }, 2000, '2026-08-28'), 2);
+    calculateStreak({ '2026-08-28': 2000, '2026-08-27': 2000 }, 2000, '2026-08-28', []), 2);
+  // cheat days: always count as a day in the streak, never break it
+  eq('calculateStreak: a cheat day mid-run keeps it ticking and counts (+1)',
+    calculateStreak({ '2026-08-28': 1500, '2026-08-27': 3500, '2026-08-26': 1500 }, 2000, '2026-08-28', ['2026-08-27']), 3);
+  eq('calculateStreak: an over-target cheat day does not break the run',
+    calculateStreak({ '2026-08-28': 3000, '2026-08-27': 1500 }, 2000, '2026-08-28', ['2026-08-28']), 2);
+  eq('calculateStreak: a cheat day with nothing logged still counts',
+    calculateStreak({ '2026-08-28': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28', ['2026-08-27']), 3);
+  eq('calculateStreak: an empty non-cheat today still does not break it (with cheat days present)',
+    calculateStreak({ '2026-08-27': 1500, '2026-08-26': 1500 }, 2000, '2026-08-28', ['2026-08-20']), 2);
+  eq('calculateStreak: an empty cheat-day today counts as day 1',
+    calculateStreak({ '2026-08-27': 1500 }, 2000, '2026-08-28', ['2026-08-28']), 2);
 
   // ---------- weekStats ----------
   const week = ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07'];

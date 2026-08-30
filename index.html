@@ -157,6 +157,7 @@
   .app.readonly #edit-goal-weight-btn,
   .app.readonly #goal-weight-form,
   .app.readonly #tdee-apply-row,
+  .app.readonly #cheat-day-btn,
   .app.readonly #export-btn,
   .app.readonly #import-btn,
   .app.readonly .row-list .entry-actions {
@@ -635,6 +636,28 @@
     color: var(--moss-deep);
   }
 
+  #cheat-day-btn {
+    margin-top: 6px;
+  }
+
+  #cheat-day-btn.is-cheat {
+    color: var(--gold);
+  }
+
+  .cheat-pill {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: var(--paper-raised);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+  }
+
   .target-settings {
     margin-top: 12px;
   }
@@ -777,6 +800,12 @@
     align-items: stretch;
     justify-content: flex-start;
     gap: 4px;
+  }
+
+  .day-detail-actions {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
   }
 
   .day-detail-add {
@@ -1030,6 +1059,7 @@
         <ul id="macro-legend" class="macro-legend"></ul>
       </div>
       <p class="streak-line" id="streak-line"></p>
+      <button type="button" id="cheat-day-btn" class="ghost-btn"></button>
 
       <div class="target-settings">
         <button type="button" id="edit-target-btn" class="ghost-btn">Change daily targets</button>
@@ -1365,6 +1395,12 @@
   let editingWeighInId = null;
   let goalWeight = loadGoalWeight();
 
+  // Days ('YYYY-MM-DD') the user marked as planned cheat days. They keep the
+  // streak ticking and never show a red "over" treatment; their calories still
+  // count in every average and the TDEE estimate. Stored inside the settings
+  // slice so they sync across devices with no extra plumbing.
+  let cheatDays = loadCheatDays();
+
   // Firestore sync state. currentUid is the signed-in user (null = signed
   // out, localStorage only). firestoreReady flips true once the first
   // snapshot has been handled — until then, writes stay local and get
@@ -1441,6 +1477,7 @@
   const macroChartCtx = macroChartCanvas.getContext('2d');
   const macroLegendEl = document.getElementById('macro-legend');
   const streakLineEl = document.getElementById('streak-line');
+  const cheatDayBtn = document.getElementById('cheat-day-btn');
   const meterFillEl = document.getElementById('meter-fill');
   const remainingLineEl = document.getElementById('remaining-line');
   const editTargetBtn = document.getElementById('edit-target-btn');
@@ -1944,21 +1981,32 @@
   }
 
   function renderStreak() {
-    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY);
+    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY, cheatDays);
     streakLineEl.innerHTML = '';
 
     if (streak === 0) {
       streakLineEl.textContent = 'No active streak yet — a day under target starts one.';
-      return;
+    } else {
+      const label = document.createTextNode('Current streak: ');
+      const count = document.createElement('span');
+      count.className = 'streak-count';
+      count.textContent = streak + (streak === 1 ? ' day' : ' days');
+      streakLineEl.appendChild(label);
+      streakLineEl.appendChild(count);
     }
 
-    const label = document.createTextNode('Current streak: ');
-    const count = document.createElement('span');
-    count.className = 'streak-count';
-    count.textContent = streak + (streak === 1 ? ' day' : ' days');
+    renderCheatDayButton();
+  }
 
-    streakLineEl.appendChild(label);
-    streakLineEl.appendChild(count);
+  // The "mark today as a cheat day" toggle under the streak line. Hidden while
+  // viewing the other person's log (read-only).
+  function renderCheatDayButton() {
+    const on = isCheatDay(TODAY);
+    cheatDayBtn.textContent = on
+      ? 'Cheat day — tap to undo'
+      : 'Mark today as a cheat day';
+    cheatDayBtn.classList.toggle('is-cheat', on);
+    cheatDayBtn.classList.toggle('hidden', !!viewingUid);
   }
 
   // One entry's <li> for a row list. Used by both the Today list and the
@@ -2065,15 +2113,26 @@
     renderMacroTotalsLine(proteinTotal, carbsTotal, fatTotal);
     renderMacroChart(proteinTotal, carbsTotal, fatTotal);
 
+    const todayIsCheat = isCheatDay(TODAY);
+    const remaining = dailyTarget - total;
+
     const pct = Math.min(total / dailyTarget, 1) * 100;
     meterFillEl.style.width = pct + '%';
-    meterFillEl.classList.toggle('over', total > dailyTarget);
+    // A cheat day never shows the red "over" treatment — the calories still
+    // count everywhere else, this just stops it reading as a failure.
+    meterFillEl.classList.toggle('over', !todayIsCheat && total > dailyTarget);
 
-    const remaining = dailyTarget - total;
-    remainingLineEl.textContent = remaining >= 0
-      ? remaining.toLocaleString() + ' kcal left today'
-      : Math.abs(remaining).toLocaleString() + ' kcal over today';
-    remainingLineEl.classList.toggle('over', remaining < 0);
+    if (todayIsCheat) {
+      remainingLineEl.textContent = remaining >= 0
+        ? 'Cheat day · ' + remaining.toLocaleString() + ' kcal under target'
+        : 'Cheat day · ' + Math.abs(remaining).toLocaleString() + ' kcal over target';
+      remainingLineEl.classList.remove('over');
+    } else {
+      remainingLineEl.textContent = remaining >= 0
+        ? remaining.toLocaleString() + ' kcal left today'
+        : Math.abs(remaining).toLocaleString() + ' kcal over today';
+      remainingLineEl.classList.toggle('over', remaining < 0);
+    }
   }
 
   function formatWeight(weight, unit) {
@@ -2215,7 +2274,9 @@
 
     dates.forEach(function (date) {
       const dayTotal = totals[date];
-      const over = dayTotal > dailyTarget;
+      const cheat = isCheatDay(date);
+      // A cheat day still shows its real total, just never the red "over" look.
+      const over = !cheat && dayTotal > dailyTarget;
       const pct = Math.min(dayTotal / dailyTarget, 1) * 100;
       const expanded = expandedHistoryDates.has(date);
 
@@ -2243,6 +2304,12 @@
       toggle.textContent = expanded ? '▾' : '▸';
       name.appendChild(toggle);
       name.appendChild(document.createTextNode(date === TODAY ? 'Today' : date));
+      if (cheat) {
+        const pill = document.createElement('span');
+        pill.className = 'cheat-pill';
+        pill.textContent = 'cheat day';
+        name.appendChild(pill);
+      }
 
       const bar = document.createElement('div');
       bar.className = 'day-bar';
@@ -2294,6 +2361,9 @@
       detail.appendChild(ul);
     }
 
+    const actions = document.createElement('div');
+    actions.className = 'day-detail-actions';
+
     const addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'day-detail-add';
@@ -2306,7 +2376,18 @@
       showView('today');
       nameInput.focus();
     });
-    detail.appendChild(addBtn);
+    actions.appendChild(addBtn);
+
+    const cheatBtn = document.createElement('button');
+    cheatBtn.type = 'button';
+    cheatBtn.className = 'day-detail-add';
+    cheatBtn.textContent = isCheatDay(date) ? 'Unmark cheat day' : 'Mark as cheat day';
+    cheatBtn.addEventListener('click', function () {
+      toggleCheatDay(date);
+    });
+    actions.appendChild(cheatBtn);
+
+    detail.appendChild(actions);
 
     return detail;
   }
@@ -2479,7 +2560,11 @@
       const barHeight = (total / chartMax) * plotHeight;
       const y = paddingTop + plotHeight - barHeight;
 
-      trendCtx.fillStyle = total > dailyTarget ? clayColor : mossColor;
+      // Cheat days render gold instead of clay-red, so a planned big day
+      // doesn't read as a failure on the trend.
+      trendCtx.fillStyle = isCheatDay(dates[i])
+        ? goldColor
+        : (total > dailyTarget ? clayColor : mossColor);
       trendCtx.fillRect(x, y, barWidth, Math.max(barHeight, 1));
 
       const date = new Date(dates[i] + 'T00:00:00');
@@ -2695,7 +2780,8 @@
       proteinTarget: proteinTarget,
       carbsTarget: carbsTarget,
       fatTarget: fatTarget,
-      goalWeight: goalWeight
+      goalWeight: goalWeight,
+      cheatDays: cheatDays
     };
   }
 
@@ -2815,6 +2901,36 @@
   function loadGoalWeight() {
     const saved = localStorage.getItem('calorie-goal-weight');
     return saved ? Number(saved) : null;
+  }
+
+  function saveCheatDays() {
+    localStorage.setItem('calorie-cheat-days', JSON.stringify(cheatDays));
+  }
+
+  function loadCheatDays() {
+    const saved = localStorage.getItem('calorie-cheat-days');
+    try {
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  function isCheatDay(date) {
+    return cheatDays.indexOf(date) !== -1;
+  }
+
+  function toggleCheatDay(date) {
+    if (viewingUid) { return; }
+    if (isCheatDay(date)) {
+      cheatDays = cheatDays.filter(function (d) { return d !== date; });
+    } else {
+      cheatDays = cheatDays.concat([date]);
+    }
+    saveCheatDays();
+    syncSettings();
+    render();
   }
 
   function renderWeightView() {
@@ -3289,6 +3405,10 @@
     legendTrendEl.classList.toggle('hidden', !fitDrawn);
   }
 
+  cheatDayBtn.addEventListener('click', function () {
+    toggleCheatDay(TODAY);
+  });
+
   editTargetBtn.addEventListener('click', function () {
     targetCaloriesInput.value = dailyTarget;
     targetProteinInput.value = proteinTarget === null ? '' : proteinTarget;
@@ -3550,11 +3670,14 @@
     const protein = todaysEntries.reduce(function (sum, e) { return sum + e.protein; }, 0);
     const carbs = todaysEntries.reduce(function (sum, e) { return sum + e.carbs; }, 0);
     const fat = todaysEntries.reduce(function (sum, e) { return sum + e.fat; }, 0);
-    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY);
+    const streak = calculateStreak(totalsByDate(entries), dailyTarget, TODAY, cheatDays);
     const dateLabel = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
     const lines = [];
     lines.push('Calorie Deficit Log — ' + dateLabel);
+    if (isCheatDay(TODAY)) {
+      lines.push('(Cheat day)');
+    }
     lines.push('Total: ' + total.toLocaleString() + ' / ' + dailyTarget.toLocaleString() + ' kcal');
     lines.push(formatMacroTotals(protein, carbs, fat));
     lines.push('Streak: ' + streak + (streak === 1 ? ' day' : ' days'));
@@ -3791,10 +3914,12 @@
     carbsTarget = typeof s.carbsTarget === 'number' ? s.carbsTarget : null;
     fatTarget = typeof s.fatTarget === 'number' ? s.fatTarget : null;
     goalWeight = typeof s.goalWeight === 'number' ? s.goalWeight : null;
+    cheatDays = Array.isArray(s.cheatDays) ? s.cheatDays : [];
     saveProteinTarget();
     saveCarbsTarget();
     saveFatTarget();
     saveGoalWeight();
+    saveCheatDays();
   }
 
   function onFirestoreSnapshot(data) {
@@ -3886,7 +4011,8 @@
     return {
       entries: entries, foods: foods, weighIns: weighIns,
       dailyTarget: dailyTarget, proteinTarget: proteinTarget,
-      carbsTarget: carbsTarget, fatTarget: fatTarget, goalWeight: goalWeight
+      carbsTarget: carbsTarget, fatTarget: fatTarget, goalWeight: goalWeight,
+      cheatDays: cheatDays
     };
   }
 
@@ -3902,6 +4028,7 @@
     carbsTarget = ownStash.carbsTarget;
     fatTarget = ownStash.fatTarget;
     goalWeight = ownStash.goalWeight;
+    cheatDays = ownStash.cheatDays;
     ownStash = null;
   }
 
@@ -3983,6 +4110,7 @@
       carbsTarget = typeof s.carbsTarget === 'number' ? s.carbsTarget : null;
       fatTarget = typeof s.fatTarget === 'number' ? s.fatTarget : null;
       goalWeight = typeof s.goalWeight === 'number' ? s.goalWeight : null;
+      cheatDays = Array.isArray(s.cheatDays) ? s.cheatDays : [];
       render();
       // The gold banner already says we're viewing their log read-only, so on a
       // normal load just clear the transient note; only speak up if it's empty.
