@@ -21,7 +21,7 @@ it and spend against it. The key lives here instead.
 1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Worker**
 2. Give it a name (e.g. `food-scan`), **Deploy** the starter, then **Edit code**
 3. Delete the starter code, paste all of `food-scan-worker.js`, **Deploy**
-4. **Settings → Variables and Secrets**, add these four:
+4. **Settings → Variables and Secrets**, add these four (plus one optional):
 
    | Name | Type | Value |
    |------|------|-------|
@@ -29,6 +29,7 @@ it and spend against it. The key lives here instead.
    | `FIREBASE_API_KEY` | Text | the app's public Firebase web API key (in `index.html`, the `firebaseConfig.apiKey` value) |
    | `ALLOWED_EMAILS` | Text | your Google account, comma, Annelyn's Google account — the two that sign into the app |
    | `APP_ORIGIN` | Text | `https://calorie-deficit-log.web.app` |
+   | `GEMINI_MODEL` | Text | *optional.* The Gemini model id. Leave it unset to use `DEFAULT_MODEL` in the code (`gemini-3.6-flash`). When Google retires that model — the 404 error body names the replacement — set this variable to the new id and **Deploy**; no code edit needed. |
 
 5. **Deploy** again so the variables take effect
 6. Copy the Worker URL (looks like `https://food-scan.<your-subdomain>.workers.dev`)
@@ -42,9 +43,10 @@ that part.
 
 ## Free tier limits
 
-Gemini 2.5 Flash free tier is well past personal use (hundreds of requests a
-day). If Google changes the model name, edit the `MODEL` constant at the top
-of `food-scan-worker.js` and redeploy.
+The Gemini flash free tier is well past personal use (hundreds of requests a
+day). If Google retires the model, set the `GEMINI_MODEL` variable (above) to
+the id named in the 404 error and redeploy — or, failing that, edit
+`DEFAULT_MODEL` at the top of `food-scan-worker.js`.
 
 ## Cost
 

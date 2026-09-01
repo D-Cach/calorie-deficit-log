@@ -20,12 +20,17 @@
  *        FIREBASE_API_KEY  (Text)    the app's public Firebase web API key
  *        ALLOWED_EMAILS    (Text)    comma-separated Google accounts allowed
  *        APP_ORIGIN        (Text)    https://calorie-deficit-log.web.app
+ *        GEMINI_MODEL      (Text)    optional — overrides DEFAULT_MODEL below,
+ *                                    so a model retirement is a dashboard edit
  *   4. Copy the Worker URL (…workers.dev) and give it to the app
  *
  * See README.md in this folder for the step-by-step.
  */
 
-const MODEL = "gemini-3.6-flash"; // free tier, v1beta generateContent; change here if Google renames it
+// Fallback when GEMINI_MODEL isn't set. Google retires model names over time
+// (a 404 body names the current one) — set GEMINI_MODEL in the dashboard to
+// change it without touching this file.
+const DEFAULT_MODEL = "gemini-3.6-flash";
 
 const PROMPT = [
   "You estimate nutrition from a photo of food a person is about to eat.",
@@ -132,11 +137,12 @@ export default {
     // Trim defensively — a stray space or newline pasted into the dashboard
     // variable would otherwise make the key or model URL invalid.
     const geminiKey = (env.GEMINI_API_KEY || "").trim();
+    const model = (env.GEMINI_MODEL || "").trim() || DEFAULT_MODEL;
     let geminiRes;
     try {
       geminiRes = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/models/" +
-          MODEL +
+          model +
           ":generateContent?key=" +
           geminiKey,
         {
