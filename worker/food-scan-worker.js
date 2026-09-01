@@ -25,7 +25,7 @@
  * See README.md in this folder for the step-by-step.
  */
 
-const MODEL = "gemini-2.5-flash"; // free tier; bump here if Google changes it
+const MODEL = "gemini-3.6-flash"; // free tier, v1beta generateContent; change here if Google renames it
 
 const PROMPT = [
   "You estimate nutrition from a photo of food a person is about to eat.",
@@ -129,13 +129,16 @@ export default {
     }
 
     // --- call Gemini ---
+    // Trim defensively — a stray space or newline pasted into the dashboard
+    // variable would otherwise make the key or model URL invalid.
+    const geminiKey = (env.GEMINI_API_KEY || "").trim();
     let geminiRes;
     try {
       geminiRes = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/models/" +
           MODEL +
           ":generateContent?key=" +
-          env.GEMINI_API_KEY,
+          geminiKey,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -157,13 +160,17 @@ export default {
         }
       );
     } catch (err) {
+      console.log("scan: could not reach Gemini —", String(err));
       return reply({ error: "could not reach Gemini" }, 502, cors);
     }
 
     if (!geminiRes.ok) {
       const detail = await geminiRes.text();
+      // Surfaced in Cloudflare's Observability logs and in the response body so
+      // a failure is diagnosable instead of just a generic 502.
+      console.log("scan: Gemini " + geminiRes.status + " — " + detail.slice(0, 900));
       return reply(
-        { error: "Gemini error", status: geminiRes.status, detail },
+        { error: "Gemini error", status: geminiRes.status, detail: detail.slice(0, 400) },
         502,
         cors
       );
