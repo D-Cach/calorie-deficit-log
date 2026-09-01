@@ -264,3 +264,51 @@ function formatWeightDate(dateStr) {
   const date = new Date(dateStr + 'T00:00:00');
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
+
+// Sanitises the food-scan Worker's reply (Gemini's JSON, or the string form of
+// it) into a shape the app can trust: drops any item with no name, a missing or
+// non-numeric weight, or no calorie figure; clamps wild values; forces the
+// confidence to one of low/medium/high. Never throws — bad input just yields an
+// empty result. The model is a guess and the response is untrusted, so nothing
+// in here is assumed to be well-formed.
+function parseScanResult(raw) {
+  let data = raw;
+  if (typeof raw === 'string') {
+    try { data = JSON.parse(raw); } catch (e) { return { items: [], note: '' }; }
+  }
+  if (!data || typeof data !== 'object' || !Array.isArray(data.items)) {
+    return { items: [], note: '' };
+  }
+
+  // A finite number >= lo, clamped down to hi and rounded to 1dp; null otherwise.
+  function clampNum(value, lo, hi) {
+    const n = Number(value);
+    if (!isFinite(n) || n < lo) { return null; }
+    return round1(Math.min(n, hi));
+  }
+
+  const items = [];
+  data.items.forEach(function (it) {
+    if (!it || typeof it !== 'object') { return; }
+    const name = typeof it.name === 'string' ? it.name.trim() : '';
+    const grams = clampNum(it.grams, 0, 3000);
+    const calories = clampNum(it.calories, 0, 5000);
+    // !grams also rejects 0 g; calories of 0 is legitimate (water, black
+    // coffee), so that one is checked against null explicitly.
+    if (!name || !grams || calories === null) { return; }
+    items.push({
+      name: name,
+      grams: grams,
+      calories: Math.round(calories),
+      protein: clampNum(it.protein, 0, 1000) || 0,
+      carbs: clampNum(it.carbs, 0, 1000) || 0,
+      fat: clampNum(it.fat, 0, 1000) || 0,
+      confidence: (it.confidence === 'high' || it.confidence === 'medium') ? it.confidence : 'low'
+    });
+  });
+
+  return {
+    items: items,
+    note: typeof data.note === 'string' ? data.note.trim() : ''
+  };
+}

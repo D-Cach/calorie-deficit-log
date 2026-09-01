@@ -149,6 +149,7 @@
      handlers also bail on viewingUid as a backstop. */
   .app.readonly #entry-form,
   .app.readonly #recent-foods-block,
+  .app.readonly #scan-photo-block,
   .app.readonly #toggle-meal-builder-btn,
   .app.readonly #meal-builder-fields,
   .app.readonly #edit-target-btn,
@@ -378,6 +379,82 @@
 
   .new-food-fields .entry-actions {
     margin-top: 10px;
+  }
+
+  /* Photo scan (Today view) */
+  #scan-photo-block {
+    margin-bottom: 12px;
+  }
+
+  #scan-status {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  #scan-review {
+    margin-top: 12px;
+  }
+
+  .scan-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .scan-item:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .scan-item label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
+  .scan-item input {
+    font-size: 14px;
+    padding: 8px 10px;
+  }
+
+  .scan-item .scan-item-name {
+    min-width: 130px;
+  }
+
+  .scan-item label:has(.scan-item-name) {
+    flex: 1 1 130px;
+  }
+
+  .scan-item .scan-num {
+    width: 62px;
+  }
+
+  .scan-conf {
+    align-self: center;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--moss-tint);
+    color: var(--ink-soft);
+  }
+
+  .scan-conf.low {
+    background: var(--clay-tint);
+    color: var(--clay);
+  }
+
+  .scan-caveat {
+    margin: 8px 0 0;
+    font-size: 12.5px;
+    color: var(--gold);
   }
 
   #entry-form button[type="submit"] {
@@ -996,6 +1073,22 @@
       <ul id="recent-foods-list" class="row-list"></ul>
     </div>
 
+    <div id="scan-photo-block">
+      <button type="button" id="scan-photo-btn" class="ghost-btn">Scan a photo</button>
+      <input type="file" id="scan-photo-input" accept="image/*" capture="environment" class="hidden">
+      <p id="scan-status" class="hidden"></p>
+      <div id="scan-review" class="new-food-fields hidden">
+        <p class="new-food-label">What the photo looks like — edit anything that's off:</p>
+        <div id="scan-item-list"></div>
+        <p class="scan-caveat hidden" id="scan-note"></p>
+        <p class="scan-caveat">Rough estimate from one photo — portions especially. Check it against what you know before logging.</p>
+        <div class="entry-actions">
+          <button type="button" id="scan-add-to-meal-btn">Add to meal builder</button>
+          <button type="button" id="scan-discard-btn">Discard</button>
+        </div>
+      </div>
+    </div>
+
     <div class="target-settings">
       <button type="button" id="toggle-meal-builder-btn" class="ghost-btn">Build a meal</button>
       <div id="meal-builder-fields" class="new-food-fields hidden">
@@ -1264,7 +1357,11 @@
 
   window.firebaseAuth = {
     signIn: () => signInWithPopup(auth, googleProvider),
-    signOut: () => signOut(auth)
+    signOut: () => signOut(auth),
+    // The signed-in user's Firebase ID token (a short-lived signed JWT), or
+    // null when signed out. The food-scan Worker verifies it to check the
+    // caller is D or Annelyn before spending a Gemini call.
+    getIdToken: () => auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(null)
   };
 
   // Bridge to the classic script below. All synced data lives in four
@@ -1351,6 +1448,14 @@
 
 <script>
   const DEFAULT_DAILY_TARGET = 1850;
+
+  // The Cloudflare Worker that proxies a food photo to Google Gemini and
+  // returns an estimate — it holds the API key, the browser never sees it.
+  // Set up per worker/README.md.
+  const SCAN_WORKER_URL = 'https://food-scan.dcachuela13.workers.dev';
+  // Downscale a photo's longest edge to this many px before upload. Phone
+  // shots are several MB; this keeps the request and the model call quick.
+  const SCAN_MAX_EDGE = 1024;
 
   // "Today" as a 'YYYY-MM-DD' string. Not in calc.js — it reads the clock, so
   // it isn't a pure function of its inputs (formatDate, which it calls, is).
@@ -1468,6 +1573,14 @@
   const mealIngredientsListEl = document.getElementById('meal-ingredients-list');
   const logMealBtn = document.getElementById('log-meal-btn');
   const cancelMealBtn = document.getElementById('cancel-meal-btn');
+  const scanPhotoBtn = document.getElementById('scan-photo-btn');
+  const scanPhotoInput = document.getElementById('scan-photo-input');
+  const scanStatusEl = document.getElementById('scan-status');
+  const scanReviewEl = document.getElementById('scan-review');
+  const scanItemListEl = document.getElementById('scan-item-list');
+  const scanNoteEl = document.getElementById('scan-note');
+  const scanAddToMealBtn = document.getElementById('scan-add-to-meal-btn');
+  const scanDiscardBtn = document.getElementById('scan-discard-btn');
   const submitBtn = form.querySelector('button[type="submit"]');
   const listEl = document.getElementById('entry-list');
   const totalEl = document.getElementById('total-calories');
@@ -1913,6 +2026,208 @@
     resetMealBuilder();
     mealBuilderFieldsEl.classList.add('hidden');
     toggleMealBuilderBtn.classList.remove('hidden');
+  });
+
+  // ----- Photo scan -----
+  // Take a photo, shrink it, POST it to the food-scan Worker (which calls
+  // Gemini), and turn the estimate into meal-builder ingredients the user can
+  // fix and log. Nothing is logged automatically — the scan only fills the
+  // builder. Scanned foods are NOT added to the foods library: a per-photo
+  // guess has no clean per-amount rate, and saving one would poison every
+  // future entry that reuses that name.
+
+  function setScanStatus(msg) {
+    scanStatusEl.textContent = msg || '';
+    scanStatusEl.classList.toggle('hidden', !msg);
+  }
+
+  // Draw the picked image onto a canvas no bigger than SCAN_MAX_EDGE on its
+  // long side, and hand back the JPEG bytes as base64 with no data: prefix.
+  function fileToScaledJpegBase64(file) {
+    return new Promise(function (resolve, reject) {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, SCAN_MAX_EDGE / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const comma = dataUrl.indexOf(',');
+        resolve(comma === -1 ? '' : dataUrl.slice(comma + 1));
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not read that image.'));
+      };
+      img.src = url;
+    });
+  }
+
+  async function handleScanPhoto(file) {
+    if (viewingUid) { return; }
+    if (!currentUid) {
+      setScanStatus('Sign in with Google first — the photo scan needs it.');
+      return;
+    }
+    scanReviewEl.classList.add('hidden');
+    scanPhotoBtn.disabled = true;
+    setScanStatus('Analyzing photo…');
+    try {
+      const image = await fileToScaledJpegBase64(file);
+      if (!image) { throw new Error('Could not process that image.'); }
+
+      const token = await window.firebaseAuth.getIdToken();
+      if (!token) {
+        setScanStatus('Sign in with Google first — the photo scan needs it.');
+        return;
+      }
+
+      const res = await fetch(SCAN_WORKER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ image: image })
+      });
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          setScanStatus('This account is not allowed to use the photo scan.');
+        } else if (res.status >= 500) {
+          setScanStatus('The photo service had trouble. Try again in a moment.');
+        } else {
+          setScanStatus('Scan failed (' + res.status + '). Try again.');
+        }
+        return;
+      }
+
+      const parsed = parseScanResult(await res.json());
+      if (parsed.items.length === 0) {
+        setScanStatus('Could not read any food in that photo. Try a clearer, closer shot.');
+        return;
+      }
+
+      setScanStatus('');
+      renderScanReview(parsed);
+    } catch (err) {
+      setScanStatus(err && err.message ? err.message : 'Something went wrong. Try again.');
+    } finally {
+      scanPhotoBtn.disabled = false;
+    }
+  }
+
+  // One editable row per detected item. The values are read back out of the
+  // DOM at "Add to meal builder" time, so the user's edits are what's used.
+  function renderScanReview(parsed) {
+    scanItemListEl.innerHTML = '';
+    parsed.items.forEach(function (item) {
+      const row = document.createElement('div');
+      row.className = 'scan-item';
+
+      row.appendChild(scanField('name', 'Food', 'text', item.name, 'scan-item-name'));
+      row.appendChild(scanField('grams', 'Grams', 'number', item.grams, 'scan-num'));
+      row.appendChild(scanField('calories', 'kcal', 'number', item.calories, 'scan-num'));
+      row.appendChild(scanField('protein', 'P (g)', 'number', item.protein, 'scan-num'));
+      row.appendChild(scanField('carbs', 'C (g)', 'number', item.carbs, 'scan-num'));
+      row.appendChild(scanField('fat', 'F (g)', 'number', item.fat, 'scan-num'));
+
+      const conf = document.createElement('span');
+      conf.className = 'scan-conf ' + item.confidence;
+      conf.textContent = item.confidence;
+      row.appendChild(conf);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'delete-btn';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', function () { row.remove(); });
+      row.appendChild(removeBtn);
+
+      scanItemListEl.appendChild(row);
+    });
+
+    scanNoteEl.textContent = parsed.note || '';
+    scanNoteEl.classList.toggle('hidden', !parsed.note);
+    scanReviewEl.classList.remove('hidden');
+  }
+
+  function scanField(key, labelText, type, value, cls) {
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = type;
+    if (type === 'number') { input.step = 'any'; input.min = '0'; }
+    input.className = cls;
+    input.dataset.key = key;
+    input.value = value;
+    label.appendChild(input);
+    return label;
+  }
+
+  // Turn the (edited) review rows into meal-builder ingredient objects — the
+  // same shape addMealIngredientBtn pushes, so "Log meal" needs no changes.
+  function scanReviewToIngredients() {
+    const ingredients = [];
+    scanItemListEl.querySelectorAll('.scan-item').forEach(function (row) {
+      const get = function (key) {
+        const el = row.querySelector('[data-key="' + key + '"]');
+        return el ? el.value : '';
+      };
+      const name = get('name').trim();
+      const grams = Number(get('grams'));
+      if (!name || !isFinite(grams) || grams <= 0) { return; }
+      ingredients.push({
+        name: name,
+        weight: grams,
+        unit: 'g',
+        calories: Math.max(0, Math.round(Number(get('calories')) || 0)),
+        protein: Math.max(0, round1(Number(get('protein')) || 0)),
+        carbs: Math.max(0, round1(Number(get('carbs')) || 0)),
+        fat: Math.max(0, round1(Number(get('fat')) || 0))
+      });
+    });
+    return ingredients;
+  }
+
+  function clearScan() {
+    scanReviewEl.classList.add('hidden');
+    scanItemListEl.innerHTML = '';
+    setScanStatus('');
+    scanPhotoInput.value = ''; // so re-picking the same file still fires 'change'
+  }
+
+  scanPhotoBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
+    if (!currentUid) {
+      setScanStatus('Sign in with Google first — the photo scan needs it.');
+      return;
+    }
+    scanPhotoInput.click();
+  });
+
+  scanPhotoInput.addEventListener('change', function () {
+    const file = scanPhotoInput.files && scanPhotoInput.files[0];
+    if (file) { handleScanPhoto(file); }
+  });
+
+  scanDiscardBtn.addEventListener('click', clearScan);
+
+  scanAddToMealBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
+    const ingredients = scanReviewToIngredients();
+    if (ingredients.length === 0) {
+      setScanStatus('Nothing to add — every row is empty or has no weight.');
+      return;
+    }
+    // Fold into whatever's already in the builder rather than replacing it.
+    mealIngredients = mealIngredients.concat(ingredients);
+    renderMealIngredientsList();
+    mealBuilderFieldsEl.classList.remove('hidden');
+    toggleMealBuilderBtn.classList.add('hidden');
+    clearScan();
+    mealNameInput.focus();
+    mealBuilderFieldsEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
   function render() {

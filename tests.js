@@ -247,4 +247,43 @@
   eq('getRecentFoods returns 3 distinct non-meal foods here', rf.length, 3);
   eq('getRecentFoods respects the limit', getRecentFoods(feed, 1).length, 1);
   eq('getRecentFoods of nothing is empty', getRecentFoods([], 5).length, 0);
+
+  // ---------- parseScanResult ----------
+  const goodScan = parseScanResult({
+    items: [
+      { name: '  Grilled chicken ', grams: 150.04, calories: 248.6, protein: 46.5, carbs: 0, fat: 5.4, confidence: 'high' },
+      { name: 'Rice', grams: 200, calories: 260, protein: 5, carbs: 57, fat: 0.4, confidence: 'medium' }
+    ],
+    note: '  plate looked full  '
+  });
+  eq('parseScanResult keeps the valid items', goodScan.items.length, 2);
+  eq('parseScanResult trims the name', goodScan.items[0].name, 'Grilled chicken');
+  close('parseScanResult rounds grams to 1dp', goodScan.items[0].grams, 150, 1e-9);
+  eq('parseScanResult rounds calories to a whole number', goodScan.items[0].calories, 249);
+  eq('parseScanResult keeps a valid confidence', goodScan.items[0].confidence, 'high');
+  eq('parseScanResult trims the note', goodScan.note, 'plate looked full');
+
+  eq('parseScanResult parses a JSON string body',
+    parseScanResult('{"items":[{"name":"Egg","grams":50,"calories":78,"protein":6,"carbs":1,"fat":5,"confidence":"medium"}]}').items.length, 1);
+  eq('parseScanResult on malformed JSON is empty and does not throw', parseScanResult('{not json').items.length, 0);
+  eq('parseScanResult with no items array is empty', parseScanResult({ note: 'x' }).items.length, 0);
+  eq('parseScanResult on null is empty', parseScanResult(null).items.length, 0);
+  eq('parseScanResult defaults a missing note to an empty string', parseScanResult({ items: [] }).note, '');
+
+  const dirtyScan = parseScanResult({ items: [
+    { grams: 100, calories: 100, confidence: 'high' },                    // no name -> dropped
+    { name: 'Ghost', grams: -5, calories: 100 },                          // negative grams -> dropped
+    { name: 'Not a number', grams: 'abc', calories: 100 },                // non-numeric grams -> dropped
+    { name: 'Zero', grams: 0, calories: 100 },                            // zero grams -> dropped
+    { name: 'No cal', grams: 50 },                                        // missing calories -> dropped
+    { name: 'Huge', grams: 99999, calories: 999999, confidence: 'bogus' } // clamped, confidence reset
+  ] });
+  eq('parseScanResult drops nameless / bad-number / zero-weight / calorie-less items', dirtyScan.items.length, 1);
+  eq('parseScanResult clamps an implausible weight', dirtyScan.items[0].grams, 3000);
+  eq('parseScanResult clamps implausible calories', dirtyScan.items[0].calories, 5000);
+  eq('parseScanResult resets an unknown confidence to low', dirtyScan.items[0].confidence, 'low');
+
+  const zeroCal = parseScanResult({ items: [{ name: 'Water', grams: 300, calories: 0, confidence: 'high' }] });
+  eq('parseScanResult keeps a genuine zero-calorie item', zeroCal.items.length, 1);
+  eq('parseScanResult fills missing macros with 0', zeroCal.items[0].protein, 0);
 })();
