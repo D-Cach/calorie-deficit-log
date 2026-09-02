@@ -423,6 +423,16 @@
     padding: 8px 10px;
   }
 
+  .scan-item .scan-weight-wrap {
+    display: flex;
+    gap: 4px;
+  }
+
+  .scan-item .scan-weight-wrap select {
+    font-size: 14px;
+    padding: 8px 6px;
+  }
+
   .scan-item .scan-item-name {
     min-width: 130px;
   }
@@ -2126,7 +2136,7 @@
       row.className = 'scan-item';
 
       row.appendChild(scanField('name', 'Food', 'text', item.name, 'scan-item-name'));
-      row.appendChild(scanField('grams', 'Grams', 'number', item.grams, 'scan-num'));
+      row.appendChild(scanWeightField(item.grams));
       row.appendChild(scanField('calories', 'kcal', 'number', item.calories, 'scan-num'));
       row.appendChild(scanField('protein', 'P (g)', 'number', item.protein, 'scan-num'));
       row.appendChild(scanField('carbs', 'C (g)', 'number', item.carbs, 'scan-num'));
@@ -2165,6 +2175,35 @@
     return label;
   }
 
+  // Gemini estimates a liquid's weight at ~1 g per mL (see the Worker prompt),
+  // so the number never needs converting — this just lets the user pick which
+  // unit the same figure gets saved and displayed under (e.g. a drink as mL).
+  function scanWeightField(value) {
+    const label = document.createElement('label');
+    label.textContent = 'Weight';
+    const wrap = document.createElement('span');
+    wrap.className = 'scan-weight-wrap';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    input.min = '0';
+    input.className = 'scan-num';
+    input.dataset.key = 'grams';
+    input.value = value;
+    const select = document.createElement('select');
+    select.dataset.key = 'unit';
+    ['g', 'mL'].forEach(function (u) {
+      const opt = document.createElement('option');
+      opt.value = u;
+      opt.textContent = u;
+      select.appendChild(opt);
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(select);
+    label.appendChild(wrap);
+    return label;
+  }
+
   // Turn the (edited) review rows into meal-builder ingredient objects — the
   // same shape addMealIngredientBtn pushes, so "Log meal" needs no changes.
   function scanReviewToIngredients() {
@@ -2176,11 +2215,12 @@
       };
       const name = get('name').trim();
       const grams = Number(get('grams'));
+      const unit = get('unit') || 'g';
       if (!name || !isFinite(grams) || grams <= 0) { return; }
       ingredients.push({
         name: name,
         weight: grams,
-        unit: 'g',
+        unit: unit,
         calories: Math.max(0, Math.round(Number(get('calories')) || 0)),
         protein: Math.max(0, round1(Number(get('protein')) || 0)),
         carbs: Math.max(0, round1(Number(get('carbs')) || 0)),
