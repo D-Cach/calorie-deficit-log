@@ -1085,7 +1085,9 @@
 
     <div id="scan-photo-block">
       <button type="button" id="scan-photo-btn" class="ghost-btn">Scan a photo</button>
+      <button type="button" id="scan-upload-btn" class="ghost-btn">Upload a photo</button>
       <input type="file" id="scan-photo-input" accept="image/*" capture="environment" class="hidden">
+      <input type="file" id="scan-upload-input" accept="image/*" class="hidden">
       <p id="scan-status" class="hidden"></p>
       <div id="scan-review" class="new-food-fields hidden">
         <p class="new-food-label">What the photo looks like — edit anything that's off:</p>
@@ -1585,6 +1587,8 @@
   const cancelMealBtn = document.getElementById('cancel-meal-btn');
   const scanPhotoBtn = document.getElementById('scan-photo-btn');
   const scanPhotoInput = document.getElementById('scan-photo-input');
+  const scanUploadBtn = document.getElementById('scan-upload-btn');
+  const scanUploadInput = document.getElementById('scan-upload-input');
   const scanStatusEl = document.getElementById('scan-status');
   const scanReviewEl = document.getElementById('scan-review');
   const scanItemListEl = document.getElementById('scan-item-list');
@@ -2084,6 +2088,7 @@
     }
     scanReviewEl.classList.add('hidden');
     scanPhotoBtn.disabled = true;
+    scanUploadBtn.disabled = true;
     setScanStatus('Analyzing photo…');
     try {
       const image = await fileToScaledJpegBase64(file);
@@ -2124,6 +2129,7 @@
       setScanStatus(err && err.message ? err.message : 'Something went wrong. Try again.');
     } finally {
       scanPhotoBtn.disabled = false;
+      scanUploadBtn.disabled = false;
     }
   }
 
@@ -2235,6 +2241,7 @@
     scanItemListEl.innerHTML = '';
     setScanStatus('');
     scanPhotoInput.value = ''; // so re-picking the same file still fires 'change'
+    scanUploadInput.value = '';
   }
 
   scanPhotoBtn.addEventListener('click', function () {
@@ -2248,6 +2255,20 @@
 
   scanPhotoInput.addEventListener('change', function () {
     const file = scanPhotoInput.files && scanPhotoInput.files[0];
+    if (file) { handleScanPhoto(file); }
+  });
+
+  scanUploadBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
+    if (!currentUid) {
+      setScanStatus('Sign in with Google first — the photo scan needs it.');
+      return;
+    }
+    scanUploadInput.click();
+  });
+
+  scanUploadInput.addEventListener('change', function () {
+    const file = scanUploadInput.files && scanUploadInput.files[0];
     if (file) { handleScanPhoto(file); }
   });
 
