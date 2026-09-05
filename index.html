@@ -309,10 +309,45 @@
     color: var(--ink);
   }
 
-  #food-name,
-  #meal-food-name {
+  .autosuggest-wrap {
+    position: relative;
     flex: 1;
     min-width: 0;
+  }
+
+  #food-name,
+  #meal-food-name {
+    width: 100%;
+  }
+
+  .autosuggest-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  .autosuggest-list li {
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .autosuggest-list li:hover,
+  .autosuggest-list li.active {
+    background: var(--paper);
   }
 
   #weight-value-input {
@@ -1040,8 +1075,10 @@
   <section id="today-view">
     <form id="entry-form">
       <div class="form-row">
-        <input type="text" id="food-name" placeholder="Food name" list="food-suggestions" required>
-        <datalist id="food-suggestions"></datalist>
+        <span class="autosuggest-wrap">
+          <input type="text" id="food-name" placeholder="Food name" autocomplete="off" required>
+          <ul class="autosuggest-list hidden" id="food-name-suggest"></ul>
+        </span>
         <input type="number" id="food-weight" placeholder="Weight" step="any" min="0" required>
         <select id="food-unit">
           <option value="g" selected>g</option>
@@ -1087,7 +1124,7 @@
       <button type="button" id="scan-photo-btn" class="ghost-btn">Scan a photo</button>
       <button type="button" id="scan-upload-btn" class="ghost-btn">Upload a photo</button>
       <input type="file" id="scan-photo-input" accept="image/*" capture="environment" class="hidden">
-      <input type="file" id="scan-upload-input" accept="image/*" class="hidden">
+      <input type="file" id="scan-upload-input" accept="image/*" multiple class="hidden">
       <p id="scan-status" class="hidden"></p>
       <div id="scan-review" class="new-food-fields hidden">
         <p class="new-food-label">What the photo looks like — edit anything that's off:</p>
@@ -1109,7 +1146,10 @@
 
         <p class="new-food-label">Add an ingredient</p>
         <div class="form-row">
-          <input type="text" id="meal-food-name" placeholder="Food name" list="food-suggestions">
+          <span class="autosuggest-wrap">
+            <input type="text" id="meal-food-name" placeholder="Food name" autocomplete="off">
+            <ul class="autosuggest-list hidden" id="meal-food-name-suggest"></ul>
+          </span>
           <input type="number" id="meal-food-weight" placeholder="Weight" step="any" min="0">
           <select id="meal-food-unit">
             <option value="g" selected>g</option>
@@ -1554,7 +1594,7 @@
 
   const form = document.getElementById('entry-form');
   const nameInput = document.getElementById('food-name');
-  const foodSuggestionsEl = document.getElementById('food-suggestions');
+  const nameSuggestEl = document.getElementById('food-name-suggest');
   const weightInput = document.getElementById('food-weight');
   const unitSelect = document.getElementById('food-unit');
   const entryDateInput = document.getElementById('entry-date');
@@ -1573,6 +1613,7 @@
   const mealBuilderFieldsEl = document.getElementById('meal-builder-fields');
   const mealNameInput = document.getElementById('meal-name-input');
   const mealFoodNameInput = document.getElementById('meal-food-name');
+  const mealFoodNameSuggestEl = document.getElementById('meal-food-name-suggest');
   const mealFoodWeightInput = document.getElementById('meal-food-weight');
   const mealFoodUnitSelect = document.getElementById('meal-food-unit');
   const addMealIngredientBtn = document.getElementById('add-meal-ingredient-btn');
@@ -1684,6 +1725,88 @@
   }
 
   nameInput.addEventListener('input', updateFoodFieldsVisibility);
+
+  // A hand-rolled autocomplete dropdown, replacing the native <datalist> —
+  // datalist filtering runs in the browser's own (often slow) matching
+  // engine and got visibly laggy on phones as the food library grew.
+  // Filtering our own small array and rendering a handful of <li>s is
+  // effectively instant regardless of library size.
+  function attachFoodAutosuggest(inputEl, listEl) {
+    let matches = [];
+    let activeIndex = -1;
+    let justPicked = false;
+
+    function hide() {
+      listEl.classList.add('hidden');
+      listEl.innerHTML = '';
+      matches = [];
+      activeIndex = -1;
+    }
+
+    function highlight() {
+      Array.from(listEl.children).forEach(function (li, i) {
+        li.classList.toggle('active', i === activeIndex);
+      });
+    }
+
+    function pick(food) {
+      justPicked = true;
+      inputEl.value = food.name;
+      hide();
+      // Dispatched so updateFoodFieldsVisibility (bound separately) re-checks
+      // the new-food-fields visibility — but it also reaches renderMatches
+      // below, which would otherwise instantly re-match the just-filled
+      // value against itself and pop the dropdown back open.
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function renderMatches() {
+      if (justPicked) { justPicked = false; return; }
+      const query = inputEl.value.trim().toLowerCase();
+      if (!query) { hide(); return; }
+      matches = foods.filter(function (f) {
+        return f.name.toLowerCase().includes(query);
+      }).slice(0, 8);
+      activeIndex = -1;
+      listEl.innerHTML = '';
+      if (matches.length === 0) { listEl.classList.add('hidden'); return; }
+      matches.forEach(function (food) {
+        const li = document.createElement('li');
+        li.textContent = food.name;
+        // mousedown (not click) fires before the input's blur, so a tap on
+        // a suggestion registers before blur would otherwise hide the list.
+        li.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          pick(food);
+        });
+        listEl.appendChild(li);
+      });
+      listEl.classList.remove('hidden');
+    }
+
+    inputEl.addEventListener('input', renderMatches);
+    inputEl.addEventListener('focus', renderMatches);
+    inputEl.addEventListener('blur', function () { setTimeout(hide, 120); });
+    inputEl.addEventListener('keydown', function (e) {
+      if (matches.length === 0) { return; }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIndex = Math.min(activeIndex + 1, matches.length - 1);
+        highlight();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIndex = Math.max(activeIndex - 1, 0);
+        highlight();
+      } else if (e.key === 'Enter' && activeIndex >= 0) {
+        e.preventDefault();
+        pick(matches[activeIndex]);
+      } else if (e.key === 'Escape') {
+        hide();
+      }
+    });
+  }
+
+  attachFoodAutosuggest(nameInput, nameSuggestEl);
 
   // The log form normally targets today, but the date field lets an entry
   // land on (or be moved to) any day — for a meal forgotten yesterday, or
@@ -1844,6 +1967,7 @@
   }
 
   mealFoodNameInput.addEventListener('input', updateMealFoodFieldsVisibility);
+  attachFoodAutosuggest(mealFoodNameInput, mealFoodNameSuggestEl);
 
   function renderMealIngredientsList() {
     mealIngredientsListEl.innerHTML = '';
@@ -1918,7 +2042,6 @@
       };
       foods.push(food);
       saveFoods();
-      renderFoodSuggestions();
     }
 
     const nutrition = calcNutrition(food, weight, unit);
@@ -2080,63 +2203,79 @@
     });
   }
 
-  async function handleScanPhoto(file) {
+  // Processes one or more photos in sequence — each is a separate call to the
+  // Worker (and a separate Gemini call behind it), so a multi-photo pick
+  // shows "photo 2 of 3" progress rather than pretending it's one request.
+  // A failure on one photo doesn't abort the rest of the batch.
+  async function handleScanPhotos(files) {
     if (viewingUid) { return; }
     if (!currentUid) {
       setScanStatus('Sign in with Google first — the photo scan needs it.');
       return;
     }
-    scanReviewEl.classList.add('hidden');
+    if (!files || files.length === 0) { return; }
+
     scanPhotoBtn.disabled = true;
     scanUploadBtn.disabled = true;
-    setScanStatus('Analyzing photo…');
-    try {
-      const image = await fileToScaledJpegBase64(file);
-      if (!image) { throw new Error('Could not process that image.'); }
 
-      const token = await window.firebaseAuth.getIdToken();
-      if (!token) {
-        setScanStatus('Sign in with Google first — the photo scan needs it.');
-        return;
-      }
-
-      const res = await fetch(SCAN_WORKER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ image: image })
-      });
-
-      if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          setScanStatus('This account is not allowed to use the photo scan.');
-        } else if (res.status >= 500) {
-          setScanStatus('The photo service had trouble. Try again in a moment.');
-        } else {
-          setScanStatus('Scan failed (' + res.status + '). Try again.');
-        }
-        return;
-      }
-
-      const parsed = parseScanResult(await res.json());
-      if (parsed.items.length === 0) {
-        setScanStatus('Could not read any food in that photo. Try a clearer, closer shot.');
-        return;
-      }
-
-      setScanStatus('');
-      renderScanReview(parsed);
-    } catch (err) {
-      setScanStatus(err && err.message ? err.message : 'Something went wrong. Try again.');
-    } finally {
+    const token = await window.firebaseAuth.getIdToken();
+    if (!token) {
+      setScanStatus('Sign in with Google first — the photo scan needs it.');
       scanPhotoBtn.disabled = false;
       scanUploadBtn.disabled = false;
+      return;
     }
+
+    let addedAny = false;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const label = files.length > 1 ? 'photo ' + (i + 1) + ' of ' + files.length : 'photo';
+      setScanStatus('Analyzing ' + label + '…');
+      try {
+        const image = await fileToScaledJpegBase64(file);
+        if (!image) { throw new Error('Could not process that image.'); }
+
+        const res = await fetch(SCAN_WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ image: image })
+        });
+
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            setScanStatus('This account is not allowed to use the photo scan.');
+            break; // an auth failure won't fix itself on the next photo
+          } else if (res.status >= 500) {
+            setScanStatus('The photo service had trouble on ' + label + '. Continuing with the rest…');
+          } else {
+            setScanStatus('Scan failed on ' + label + ' (' + res.status + '). Continuing with the rest…');
+          }
+          continue;
+        }
+
+        const parsed = parseScanResult(await res.json());
+        if (parsed.items.length === 0) {
+          setScanStatus('Could not read any food in ' + label + '. Continuing with the rest…');
+          continue;
+        }
+
+        renderScanReview(parsed);
+        addedAny = true;
+      } catch (err) {
+        setScanStatus((err && err.message ? err.message : 'Something went wrong on ' + label + '.') + ' Continuing with the rest…');
+      }
+    }
+
+    setScanStatus(addedAny ? '' : 'Could not read any food in ' + (files.length > 1 ? 'those photos' : 'that photo') + '. Try a clearer, closer shot.');
+    scanPhotoBtn.disabled = false;
+    scanUploadBtn.disabled = false;
   }
 
   // One editable row per detected item. The values are read back out of the
   // DOM at "Add to meal builder" time, so the user's edits are what's used.
+  // Appends rather than replacing, so scanning/uploading more than one photo
+  // builds up a single review list instead of each call wiping the last.
   function renderScanReview(parsed) {
-    scanItemListEl.innerHTML = '';
     parsed.items.forEach(function (item) {
       const row = document.createElement('div');
       row.className = 'scan-item';
@@ -2254,8 +2393,8 @@
   });
 
   scanPhotoInput.addEventListener('change', function () {
-    const file = scanPhotoInput.files && scanPhotoInput.files[0];
-    if (file) { handleScanPhoto(file); }
+    const files = scanPhotoInput.files ? Array.from(scanPhotoInput.files) : [];
+    if (files.length) { handleScanPhotos(files); }
   });
 
   scanUploadBtn.addEventListener('click', function () {
@@ -2268,8 +2407,8 @@
   });
 
   scanUploadInput.addEventListener('change', function () {
-    const file = scanUploadInput.files && scanUploadInput.files[0];
-    if (file) { handleScanPhoto(file); }
+    const files = scanUploadInput.files ? Array.from(scanUploadInput.files) : [];
+    if (files.length) { handleScanPhotos(files); }
   });
 
   scanDiscardBtn.addEventListener('click', clearScan);
@@ -2952,20 +3091,7 @@
     });
   }
 
-  // Keeps the <datalist> that powers the food-name autocomplete in sync with
-  // the food library — the browser handles the actual suggestion dropdown,
-  // this just hands it the current list of names.
-  function renderFoodSuggestions() {
-    foodSuggestionsEl.innerHTML = '';
-    foods.forEach(function (food) {
-      const option = document.createElement('option');
-      option.value = food.name;
-      foodSuggestionsEl.appendChild(option);
-    });
-  }
-
   function renderFoods() {
-    renderFoodSuggestions();
     foodsListEl.innerHTML = '';
 
     if (foods.length === 0) {
