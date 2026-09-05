@@ -1121,9 +1121,7 @@
     </div>
 
     <div id="scan-photo-block">
-      <button type="button" id="scan-photo-btn" class="ghost-btn">Scan a photo</button>
       <button type="button" id="scan-upload-btn" class="ghost-btn">Upload a photo</button>
-      <input type="file" id="scan-photo-input" accept="image/*" capture="environment" class="hidden">
       <input type="file" id="scan-upload-input" accept="image/*" multiple class="hidden">
       <p id="scan-status" class="hidden"></p>
       <div id="scan-review" class="new-food-fields hidden">
@@ -1626,8 +1624,6 @@
   const mealIngredientsListEl = document.getElementById('meal-ingredients-list');
   const logMealBtn = document.getElementById('log-meal-btn');
   const cancelMealBtn = document.getElementById('cancel-meal-btn');
-  const scanPhotoBtn = document.getElementById('scan-photo-btn');
-  const scanPhotoInput = document.getElementById('scan-photo-input');
   const scanUploadBtn = document.getElementById('scan-upload-btn');
   const scanUploadInput = document.getElementById('scan-upload-input');
   const scanStatusEl = document.getElementById('scan-status');
@@ -2215,13 +2211,11 @@
     }
     if (!files || files.length === 0) { return; }
 
-    scanPhotoBtn.disabled = true;
     scanUploadBtn.disabled = true;
 
     const token = await window.firebaseAuth.getIdToken();
     if (!token) {
       setScanStatus('Sign in with Google first — the photo scan needs it.');
-      scanPhotoBtn.disabled = false;
       scanUploadBtn.disabled = false;
       return;
     }
@@ -2267,7 +2261,6 @@
     }
 
     setScanStatus(addedAny ? '' : 'Could not read any food in ' + (files.length > 1 ? 'those photos' : 'that photo') + '. Try a clearer, closer shot.');
-    scanPhotoBtn.disabled = false;
     scanUploadBtn.disabled = false;
   }
 
@@ -2379,23 +2372,8 @@
     scanReviewEl.classList.add('hidden');
     scanItemListEl.innerHTML = '';
     setScanStatus('');
-    scanPhotoInput.value = ''; // so re-picking the same file still fires 'change'
-    scanUploadInput.value = '';
+    scanUploadInput.value = ''; // so re-picking the same file(s) still fires 'change'
   }
-
-  scanPhotoBtn.addEventListener('click', function () {
-    if (viewingUid) { return; }
-    if (!currentUid) {
-      setScanStatus('Sign in with Google first — the photo scan needs it.');
-      return;
-    }
-    scanPhotoInput.click();
-  });
-
-  scanPhotoInput.addEventListener('change', function () {
-    const files = scanPhotoInput.files ? Array.from(scanPhotoInput.files) : [];
-    if (files.length) { handleScanPhotos(files); }
-  });
 
   scanUploadBtn.addEventListener('click', function () {
     if (viewingUid) { return; }
