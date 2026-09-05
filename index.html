@@ -1131,6 +1131,7 @@
         <p class="scan-caveat">Rough estimate from one photo — portions especially. Check it against what you know before logging.</p>
         <div class="entry-actions">
           <button type="button" id="scan-add-to-meal-btn">Add to meal builder</button>
+          <button type="button" id="scan-log-separate-btn">Log as separate entries</button>
           <button type="button" id="scan-discard-btn">Discard</button>
         </div>
       </div>
@@ -1631,6 +1632,7 @@
   const scanItemListEl = document.getElementById('scan-item-list');
   const scanNoteEl = document.getElementById('scan-note');
   const scanAddToMealBtn = document.getElementById('scan-add-to-meal-btn');
+  const scanLogSeparateBtn = document.getElementById('scan-log-separate-btn');
   const scanDiscardBtn = document.getElementById('scan-discard-btn');
   const submitBtn = form.querySelector('button[type="submit"]');
   const listEl = document.getElementById('entry-list');
@@ -2406,6 +2408,38 @@
     clearScan();
     mealNameInput.focus();
     mealBuilderFieldsEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // Logs each reviewed item straight into today's (or the picked day's) list
+  // as its own entry — same snapshot macros already shown in the review row,
+  // no meal wrapper. For a single-item photo (or several unrelated items)
+  // where "Add to meal builder" would otherwise force them into one combined
+  // meal, this keeps them as normal separate entries instead.
+  scanLogSeparateBtn.addEventListener('click', function () {
+    if (viewingUid) { return; }
+    const ingredients = scanReviewToIngredients();
+    if (ingredients.length === 0) {
+      setScanStatus('Nothing to log — every row is empty or has no weight.');
+      return;
+    }
+    const logDate = currentLogDate();
+    ingredients.forEach(function (ingredient) {
+      entries.push({
+        id: crypto.randomUUID(),
+        name: ingredient.name,
+        weight: ingredient.weight,
+        unit: ingredient.unit,
+        calories: ingredient.calories,
+        protein: ingredient.protein,
+        carbs: ingredient.carbs,
+        fat: ingredient.fat,
+        date: logDate
+      });
+    });
+    saveEntries();
+    render();
+    if (logDate !== TODAY) { flashEntryDateNote(logDate); } else { hideEntryDateNote(); }
+    clearScan();
   });
 
   function render() {
