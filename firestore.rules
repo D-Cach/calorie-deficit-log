@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// calorie-deficit-log - Firestore security rules
+// Kept in the repo as the source of truth; the console copy is what's enforced.
+// Deploy with: firebase deploy --only firestore:rules
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Each person's own subtree: users/{userId}/data/{doc}.
+    // Both household accounts may READ either subtree - that is what powers
+    // the app's "My log / Annelyn's log" toggle. Each may only WRITE their own.
+    match /users/{userId}/{document=**} {
+      allow read: if isHousehold();
+      allow write: if isHousehold() && request.auth.uid == userId;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+
+  function isHousehold() {
+    return request.auth != null
+      && request.auth.token.email in [
+           'dcachuela13@gmail.com',
+           'liboonannelyn17.svc@gmail.com'
+         ];
+  }
+}
