@@ -1507,6 +1507,10 @@
   // Downscale a photo's longest edge to this many px before upload. Phone
   // shots are several MB; this keeps the request and the model call quick.
   const SCAN_MAX_EDGE = 1024;
+  // A 5xx from the Worker is usually Gemini being briefly overloaded — its own
+  // 503 body says "try again later" — so the same photo is re-sent a few times
+  // with a growing gap before the attempt is given up on. One delay per retry.
+  const SCAN_RETRY_DELAYS_MS = [2000, 4000, 8000];
 
   // "Today" as a 'YYYY-MM-DD' string. Not in calc.js — it reads the clock, so
   // it isn't a pure function of its inputs (formatDate, which it calls, is).
@@ -2201,6 +2205,11 @@
     });
   }
 
+  // Resolves after ms milliseconds, so the retry loop below can await a pause.
+  function scanDelay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
   // Processes one or more photos in sequence — each is a separate call to the
   // Worker (and a separate Gemini call behind it), so a multi-photo pick
   // shows "photo 2 of 3" progress rather than pretending it's one request.
@@ -2223,6 +2232,13 @@
     }
 
     let addedAny = false;
+    // Why the last photo failed, when the failure was something other than the
+    // model simply not recognising any food. Kept so the closing status can say
+    // what actually went wrong — telling someone to take a clearer shot when
+    // the real answer was a 503 or an auth failure just wastes their time.
+    let lastProblem = '';
+    const more = files.length > 1 ? ' Continuing with the rest…' : '';
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const label = files.length > 1 ? 'photo ' + (i + 1) + ' of ' + files.length : 'photo';
@@ -2231,38 +2247,59 @@
         const image = await fileToScaledJpegBase64(file);
         if (!image) { throw new Error('Could not process that image.'); }
 
-        const res = await fetch(SCAN_WORKER_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify({ image: image })
-        });
+        // Re-send this photo on a 5xx, pausing longer each time. Anything else
+        // (success, 4xx) is final on the first attempt.
+        let res = null;
+        for (let attempt = 0; ; attempt++) {
+          res = await fetch(SCAN_WORKER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ image: image })
+          });
+          if (res.ok || res.status < 500 || attempt >= SCAN_RETRY_DELAYS_MS.length) { break; }
+          setScanStatus('The photo service is busy — retrying ' + label + '…');
+          await scanDelay(SCAN_RETRY_DELAYS_MS[attempt]);
+          setScanStatus('Analyzing ' + label + '…');
+        }
 
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
-            setScanStatus('This account is not allowed to use the photo scan.');
+            lastProblem = 'This account is not allowed to use the photo scan.';
+            setScanStatus(lastProblem);
             break; // an auth failure won't fix itself on the next photo
           } else if (res.status >= 500) {
-            setScanStatus('The photo service had trouble on ' + label + '. Continuing with the rest…');
+            lastProblem = 'The photo service is busy right now. Try again in a few minutes.';
           } else {
-            setScanStatus('Scan failed on ' + label + ' (' + res.status + '). Continuing with the rest…');
+            lastProblem = 'Scan failed on ' + label + ' (' + res.status + ').';
           }
+          setScanStatus(lastProblem + more);
           continue;
         }
 
         const parsed = parseScanResult(await res.json());
         if (parsed.items.length === 0) {
-          setScanStatus('Could not read any food in ' + label + '. Continuing with the rest…');
+          // A clean answer that simply found nothing — this one really is about
+          // the picture, so no problem is recorded against it.
+          setScanStatus('Could not read any food in ' + label + '.' + more);
           continue;
         }
 
         renderScanReview(parsed);
         addedAny = true;
       } catch (err) {
-        setScanStatus((err && err.message ? err.message : 'Something went wrong on ' + label + '.') + ' Continuing with the rest…');
+        lastProblem = (err && err.message) ? err.message : 'Something went wrong on ' + label + '.';
+        setScanStatus(lastProblem + more);
       }
     }
 
-    setScanStatus(addedAny ? '' : 'Could not read any food in ' + (files.length > 1 ? 'those photos' : 'that photo') + '. Try a clearer, closer shot.');
+    if (addedAny) {
+      setScanStatus('');
+    } else if (lastProblem) {
+      // The scan never got a clean answer, so don't blame the photo.
+      setScanStatus(lastProblem);
+    } else {
+      setScanStatus('Could not read any food in ' + (files.length > 1 ? 'those photos' : 'that photo') + '. Try a clearer, closer shot.');
+    }
     scanUploadBtn.disabled = false;
   }
 
